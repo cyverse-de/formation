@@ -5,12 +5,14 @@ Formation is a FastAPI-based service that provides authenticated access to iRODS
 ## Features
 
 - **Authentication**: Secure login via Keycloak OIDC with JWT token support
+- **Interactive Apps**: List and filter VICE (Visual Interactive Computing Environment) applications accessible to authenticated users
 - **File System Access**: Browse iRODS collections and retrieve file contents
 - **Metadata Support**: Access iRODS AVU (Attribute-Value-Unit) metadata as HTTP headers
 - **Content Type Detection**: Automatic MIME type detection for file responses
 - **Asynchronous Operations**: Concurrent metadata retrieval and content type detection for improved performance
 - **Pagination**: Support for offset/limit parameters when reading large files
 - **Permission Checking**: Validates user read permissions before granting access
+- **Advanced Filtering**: Filter apps by name, description, integrator, and date ranges
 
 ## Requirements
 
@@ -69,6 +71,15 @@ Set the following environment variables:
 - `KEYCLOAK_CLIENT_SECRET`: OAuth2 client secret
 - `KEYCLOAK_SSL_VERIFY`: Enable SSL verification (default: true)
 
+### Permissions Service Configuration
+- `PERMISSIONS_BASE_URL`: Base URL of permissions service (default: "http://permissions")
+- `GROUPER_USER_GROUP_ID`: ID of the public user group (default: "de-users")
+
+### Application Configuration
+- `USER_SUFFIX`: Username suffix to strip from integrator usernames (default: "@iplantcollaborative.org")
+- `APPS_BASE_URL`: Base URL of apps service (default: "http://apps")
+- `APP_EXPOSER_BASE_URL`: Base URL of app-exposer service (default: "http://app-exposer")
+
 ## Usage
 
 ### Starting the Server
@@ -100,6 +111,33 @@ fastapi dev main.py
   curl -X POST "http://localhost:8000/login" \
     -u "username:password"
   ```
+
+#### Interactive Applications
+
+**GET /apps**
+- List interactive VICE applications accessible to authenticated user
+- Requires Bearer token authentication
+- Query parameters:
+  - `limit`: Maximum apps to return (1-1000, default: 100)
+  - `offset`: Pagination offset (default: 0)
+  - `name`: Filter by app name (case-insensitive partial match)
+  - `description`: Filter by description (case-insensitive partial match)
+  - `integrator`: Filter by integrator username
+  - `integration_date`: Filter by integration date (e.g., ">2025-09-29")
+  - `edited_date`: Filter by edited date (e.g., "<=2024-12-31")
+- See [Interactive Apps Endpoint Documentation](docs/INTERACTIVE_APPS_ENDPOINT.md) for detailed usage
+- See [Date Filtering Documentation](docs/DATE_FILTERING.md) for date filter syntax
+
+**Example:**
+```bash
+# List all accessible apps
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/apps"
+
+# Filter by name and date
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/apps?name=jupyter&integration_date=>2025-01-01"
+```
 
 #### File System Operations
 
@@ -178,3 +216,35 @@ uv sync --upgrade
 uv run python main.py
 uv run pytest
 ```
+
+### Testing
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run specific test file
+uv run pytest tests/test_interactive_apps.py
+
+# Run with verbose output
+uv run pytest -v
+
+# Run with coverage
+uv run pytest --cov=. --cov-report=html
+```
+
+See [Testing Documentation](docs/TESTING.md) for comprehensive testing information.
+
+## Documentation
+
+- [Interactive Apps Endpoint](docs/INTERACTIVE_APPS_ENDPOINT.md) - Detailed documentation for the `/apps` endpoint
+- [Date Filtering](docs/DATE_FILTERING.md) - Date filter syntax and usage examples
+- [Implementation Status](docs/IMPLEMENTATION_STATUS.md) - Current implementation status and roadmap
+- [Testing Guide](docs/TESTING.md) - Testing approach and guidelines
+
+## API Documentation
+
+Interactive API documentation is available when the server is running:
+
+- **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`
