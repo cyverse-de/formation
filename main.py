@@ -29,7 +29,17 @@ tags_metadata = [
     },
 ]
 
-app = FastAPI(openapi_tags=tags_metadata)
+# Normalize path prefix - empty string or "/" means no prefix
+path_prefix = config.path_prefix
+if path_prefix in ("", "/"):
+    path_prefix = ""
+elif not path_prefix.startswith("/"):
+    path_prefix = f"/{path_prefix}"
+
+app = FastAPI(
+    openapi_tags=tags_metadata,
+    root_path=path_prefix,
+)
 
 
 @app.get("/", status_code=200, tags=["Health"])

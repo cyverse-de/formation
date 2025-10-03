@@ -54,6 +54,7 @@ class Config:
         app_config = json_config.get("application", {})
         self.user_suffix = os.environ.get("USER_SUFFIX") or app_config.get("user_suffix", "@iplantcollaborative.org")
         self.vice_domain = os.environ.get("VICE_DOMAIN") or app_config.get("vice_domain", ".cyverse.run")
+        self.path_prefix = os.environ.get("PATH_PREFIX") or app_config.get("path_prefix", "/formation")
 
         # VICE URL checking settings
         self.vice_url_check_timeout = float(
