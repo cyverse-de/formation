@@ -31,6 +31,18 @@ tags_metadata = [
 
 app = FastAPI(openapi_tags=tags_metadata)
 
+
+@app.get("/", status_code=200, tags=["Health"])
+def greeting():
+    """
+    Health check endpoint that returns a greeting message.
+
+    This endpoint is intentionally unauthenticated to allow health checks
+    from monitoring systems and load balancers.
+    """
+    return "Hello from formation."
+
+
 # Include routers
 app.include_router(apps.router)
 app.include_router(auth_routes.router)
