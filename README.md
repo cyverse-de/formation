@@ -248,3 +248,8 @@ Interactive API documentation is available when the server is running:
 
 - **Swagger UI**: `http://localhost:8000/docs`
 - **ReDoc**: `http://localhost:8000/redoc`
+
+The API documentation is organized into three main categories:
+- **Authentication** - User authentication and session management
+- **Apps** - App discovery, job submission, and lifecycle management
+- **Data Store** - iRODS file system operations and metadata access

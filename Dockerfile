@@ -1,38 +1,37 @@
-# Use Python 3.13 slim image as base
-FROM python:3.13-slim
+# Adapted from https://github.com/astral-sh/uv-docker-example/blob/main/Dockerfile
 
-# Set working directory
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+
 WORKDIR /app
 
-# Install system dependencies required for psycopg and other native extensions
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+ENV UV_LINK_MODE=copy
 
-# Install uv for fast dependency management
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+# Install system dependencies
+RUN apt update -y
+RUN apt install -y --no-install-recommends libsasl2-dev
+RUN apt install -y --no-install-recommends python3-dev
+RUN apt install -y --no-install-recommends libldap2-dev
+RUN apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency files first for better Docker layer caching
-COPY pyproject.toml uv.lock ./
+# Copy dependency files first for better caching
+COPY uv.lock pyproject.toml ./
 
-# Install dependencies using uv
-RUN uv sync --frozen --no-cache --no-dev
+# Install dependencies without the project itself
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-install-project --no-dev
 
-# Copy application source code
-COPY . .
+# Copy the entire project
+COPY . /app
 
-# Create a non-root user for security
-RUN useradd --create-home --shell /bin/bash app \
-    && chown -R app:app /app
-USER app
+# Install the project itself
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev
 
-# Expose the port the app runs on
+# Set PATH to include virtual environment
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Expose port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/docs', timeout=10)"
-
-# Run the application using FastAPI CLI
-CMD ["uv", "run", "fastapi", "run", "main.py", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
