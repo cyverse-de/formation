@@ -8,7 +8,7 @@ from uuid import UUID
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
-from main import parse_date_filter
+from routes.apps import parse_date_filter, get_apps_from_db
 
 
 # Table-driven tests for parse_date_filter
@@ -132,9 +132,8 @@ def mock_db_conn():
     return conn, cursor
 
 
-def test_get_interactive_apps_empty_permissions(mock_permissions_client, mock_db_conn):
+def test_get_apps_empty_permissions(mock_permissions_client, mock_db_conn):
     """Test that empty permissions returns empty result."""
-    from main import get_interactive_apps
 
     # Setup mocks
     mock_permissions_client.get_accessible_app_ids.return_value = set()
@@ -144,7 +143,7 @@ def test_get_interactive_apps_empty_permissions(mock_permissions_client, mock_db
     pass
 
 
-def test_get_interactive_apps_with_results(mock_permissions_client, mock_db_conn):
+def test_get_apps_with_results(mock_permissions_client, mock_db_conn):
     """Test successful retrieval of interactive apps."""
     # Test implementation would go here
     # Would mock:
@@ -155,41 +154,41 @@ def test_get_interactive_apps_with_results(mock_permissions_client, mock_db_conn
     pass
 
 
-def test_list_interactive_apps_authentication_required():
+def test_list_apps_authentication_required():
     """Test that endpoint requires authentication."""
     # Would test that unauthenticated requests return 401
     pass
 
 
-def test_list_interactive_apps_pagination_validation():
+def test_list_apps_pagination_validation():
     """Test pagination parameter validation."""
     # Test invalid limit values (< 1, > 1000)
     # Test invalid offset values (< 0)
     pass
 
 
-def test_list_interactive_apps_permissions_service_error():
+def test_list_apps_permissions_service_error():
     """Test handling of permissions service errors."""
     # Mock permissions service returning HTTP error
     # Verify 503 response
     pass
 
 
-def test_list_interactive_apps_database_error():
+def test_list_apps_database_error():
     """Test handling of database errors."""
     # Mock database query raising exception
     # Verify 500 response
     pass
 
 
-def test_list_interactive_apps_invalid_date_filter():
+def test_list_apps_invalid_date_filter():
     """Test that invalid date filters return 400 Bad Request."""
     # Would test endpoint with invalid date filter
     # Verify 400 response with appropriate error message
     pass
 
 
-def test_get_interactive_apps_with_date_filters():
+def test_get_apps_with_date_filters():
     """Test filtering by integration_date and edited_date."""
     # Would test:
     # - Filter with integration_date only

@@ -26,7 +26,7 @@ class TestAppsClient:
         }
 
         httpx_mock.add_response(
-            url=f"http://apps.test/apps/{app_id}?user={username}",
+            url=f"http://apps.test/apps/interactive/{app_id}?user={username}",
             json=expected_response,
             status_code=200,
         )
@@ -41,7 +41,7 @@ class TestAppsClient:
         username = "testuser"
 
         httpx_mock.add_response(
-            url=f"http://apps.test/apps/{app_id}?user={username}",
+            url=f"http://apps.test/apps/interactive/{app_id}?user={username}",
             status_code=404,
         )
 
@@ -52,6 +52,7 @@ class TestAppsClient:
     async def test_submit_analysis_success(self, client, httpx_mock):
         """Test successful analysis submission."""
         username = "testuser"
+        email = "testuser@example.com"
         analysis_id = uuid4()
         submission = {
             "app_id": str(uuid4()),
@@ -65,12 +66,12 @@ class TestAppsClient:
         }
 
         httpx_mock.add_response(
-            url=f"http://apps.test/analyses?user={username}",
+            url=f"http://apps.test/analyses?user={username}&email={email}",
             json=expected_response,
             status_code=200,
         )
 
-        result = await client.submit_analysis(submission, username)
+        result = await client.submit_analysis(submission, username, email)
         assert result == expected_response
         assert result["id"] == str(analysis_id)
 
@@ -201,3 +202,41 @@ class TestAppExposerClient:
         result = await client.exit_without_save(analysis_id)
         assert result["status"] == "terminated"
         assert result["outputs_saved"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_external_id_success(self, client, httpx_mock):
+        """Test successful external ID retrieval."""
+        analysis_id = uuid4()
+        external_id = str(uuid4())
+        expected_response = {"external_id": external_id}
+
+        httpx_mock.add_response(
+            url=f"http://app-exposer.test/vice/admin/analyses/{analysis_id}/external-id",
+            json=expected_response,
+            status_code=200,
+        )
+
+        result = await client.get_external_id(analysis_id)
+        assert result == expected_response
+        assert result["external_id"] == external_id
+
+    @pytest.mark.asyncio
+    async def test_get_async_data_success(self, client, httpx_mock):
+        """Test successful async data retrieval."""
+        external_id = str(uuid4())
+        analysis_id = str(uuid4())
+        expected_response = {
+            "analysisID": analysis_id,
+            "subdomain": "a12345678",
+            "ipAddr": "10.0.0.1",
+        }
+
+        httpx_mock.add_response(
+            url=f"http://app-exposer.test/vice/async-data?external-id={external_id}",
+            json=expected_response,
+            status_code=200,
+        )
+
+        result = await client.get_async_data(external_id)
+        assert result == expected_response
+        assert result["subdomain"] == "a12345678"

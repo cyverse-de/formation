@@ -1,0 +1,28 @@
+{
+  "irods": {
+    "host": "irods.example.com",
+    "port": "1247",
+    "user": "rods",
+    "password": "changeme",
+    "zone": "iplant"
+  },
+  "keycloak": {
+    "server_url": "https://keycloak.example.com",
+    "realm": "cyverse",
+    "client_id": "formation",
+    "client_secret": "changeme",
+    "ssl_verify": true
+  },
+  "services": {
+    "apps_base_url": "http://apps:8080",
+    "app_exposer_base_url": "http://app-exposer:8080",
+    "permissions_base_url": "http://permissions:8080"
+  },
+  "application": {
+    "user_suffix": "@iplantcollaborative.org",
+    "vice_domain": ".cyverse.run",
+    "vice_url_check_timeout": 5.0,
+    "vice_url_check_retries": 3,
+    "vice_url_check_cache_ttl": 5.0
+  }
+}
