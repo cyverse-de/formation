@@ -10,6 +10,10 @@
 * Use type hinting in Python.
 * Generally treat warnings as errors unless fixing the warning would cause difficult to fix breakages.
 * Run unit tests after changes to make sure there aren't any breakages.
+* When possible use the apps service API to get information and perform operations.
+* If it's not possible through the apps API, then check the app-exposer API and use that if necessary.
+* Only access the database directly if absolutely necessary and ask for permission before adding database access code.
+
 
 # Tooling
 * Use 'uv' for building, running, and managing Python projects.
@@ -17,8 +21,13 @@
 
 # Other important projects
 * portal-conductor: Usually available at ../portal-conductor/. Provides an API for the portal.
+* apps: Usually available at ../apps. Provides an API for Discovery Environment app information and operations.
+* app-exposer: Usually available at ../app-exposer. Provides an API for the VICE feature in the Discovery Environment, which is a subset of the overall apps feature.
 
 # Commands
-- npm run dev: Run the portal locally
-- curl -k https://portal-conductor/: Test if the portal-conductor is available locally.
+- 'uv run fastapi run main.py' launches the formation server locally.
+- 'uv sync' will update the dependencies locally.
+- 'uv add <dependency>' will add a new dependency.
+- 'uv cache clean' will delete the local cache of dependencies.
+
 
