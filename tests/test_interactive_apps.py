@@ -2,11 +2,10 @@
 Tests for the interactive apps endpoint.
 """
 
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from datetime import datetime, timezone
-from uuid import UUID
-from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi.testclient import TestClient
 
 from routes.apps import parse_date_filter
 

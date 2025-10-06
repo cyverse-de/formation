@@ -6,7 +6,6 @@ to determine which apps are accessible to users.
 """
 
 import os
-from typing import Set
 from uuid import UUID
 
 import httpx
@@ -30,7 +29,7 @@ class PermissionsClient:
             "GROUPER_USER_GROUP_ID", "de-users"
         )
 
-    async def get_public_app_ids(self) -> Set[UUID]:
+    async def get_public_app_ids(self) -> set[UUID]:
         """
         Get the set of all public app IDs.
 
@@ -67,7 +66,7 @@ class PermissionsClient:
 
     async def get_user_accessible_app_ids(
         self, username: str, min_level: str = "read"
-    ) -> Set[UUID]:
+    ) -> set[UUID]:
         """
         Get the set of app IDs accessible to a specific user.
 
@@ -103,7 +102,7 @@ class PermissionsClient:
 
             return app_ids
 
-    async def get_accessible_app_ids(self, username: str | None = None) -> Set[UUID]:
+    async def get_accessible_app_ids(self, username: str | None = None) -> set[UUID]:
         """
         Get the set of all app IDs accessible to a user.
 

@@ -22,6 +22,11 @@ Formation is a FastAPI-based service that provides authenticated access to iRODS
 - Keycloak server for authentication
 - PostgreSQL database
 
+### Development Requirements
+
+- [jq](https://jqlang.github.io/jq/) - Command-line JSON processor (for hooks)
+- [ruff](https://docs.astral.sh/ruff/) - Fast Python linter and formatter (installed via uv)
+
 ## Installation
 
 This project uses [uv](https://docs.astral.sh/uv/) as the package manager for fast, reliable dependency management.
@@ -187,18 +192,45 @@ curl -H "Authorization: Bearer <token>" \
 
 ## Development
 
-### Code Style
+### Prerequisites
+
+Development tools required:
 
 ```bash
-# Format and lint code using uv
+# Install jq (for automated hooks)
+# macOS
+brew install jq
+
+# Ubuntu/Debian
+sudo apt-get install jq
+
+# Fedora/RHEL
+sudo dnf install jq
+
+# Ruff is automatically installed via uv sync
+# but can also be installed globally:
+uv tool install ruff
+```
+
+### Code Style
+
+The project uses [ruff](https://docs.astral.sh/ruff/) for linting and formatting:
+
+```bash
+# Format and lint code
 uv run ruff format
 uv run ruff check --fix
 
-# Or install ruff globally and run directly
-uv tool install ruff
-ruff format
-ruff check --fix
+# Check for issues without fixing
+uv run ruff check
+
+# Format specific files
+uv run ruff check --fix routes/apps.py
 ```
+
+### Automated Linting (Optional)
+
+For automatic linting after file edits, see `.claude/hooks-example.md` for Claude Code hook configuration. This requires `jq` to be installed.
 
 ### Working with uv
 

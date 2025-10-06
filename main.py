@@ -1,7 +1,8 @@
 """Main FastAPI application module."""
 
 import sys
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -13,7 +14,8 @@ import auth
 import ds
 from config import config
 from exceptions import FormationException
-from routes import apps, auth as auth_routes, datastore
+from routes import apps, datastore
+from routes import auth as auth_routes
 
 tags_metadata = [
     {
@@ -62,9 +64,10 @@ app.include_router(datastore.router)
 
 @app.exception_handler(FormationException)
 async def formation_exception_handler(
-    _request: Request, exc: FormationException
+    request: Request, exc: FormationException
 ) -> JSONResponse:
     """Handle custom Formation exceptions."""
+    del request  # Unused but required by FastAPI signature
     print(f"{exc.__class__.__name__}: {exc.message}", file=sys.stderr)
     response_content: dict[str, Any] = {"detail": exc.message}
     if exc.details:
@@ -74,18 +77,20 @@ async def formation_exception_handler(
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(
-    _request: Request, exc: StarletteHTTPException
+    request: Request, exc: StarletteHTTPException
 ) -> JSONResponse:
     """Handle FastAPI HTTPException."""
+    del request  # Unused but required by FastAPI signature
     print(exc, file=sys.stderr)
     return JSONResponse(content={"detail": exc.detail}, status_code=exc.status_code)
 
 
 @app.exception_handler(httpx.HTTPStatusError)
 async def httpx_exception_handler(
-    _request: Request, exc: httpx.HTTPStatusError
+    request: Request, exc: httpx.HTTPStatusError
 ) -> JSONResponse:
     """Handle httpx HTTP errors from external services."""
+    del request  # Unused but required by FastAPI signature
     print(f"External service error: {exc.response.status_code}", file=sys.stderr)
     return JSONResponse(
         content={

@@ -1,8 +1,9 @@
 """Shared dependencies for route handlers."""
 
 from typing import Any
+
 from fastapi import Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 import auth
 from config import config

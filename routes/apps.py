@@ -4,8 +4,8 @@ import asyncio
 import re
 import sys
 import time
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -15,8 +15,6 @@ from clients import AppExposerClient, AppsClient
 from config import config
 from dependencies import extract_user_from_jwt, get_current_user
 from exceptions import (
-    ExternalServiceError,
-    ResourceNotFoundError,
     ServiceUnavailableError,
     ValidationError,
 )
@@ -122,8 +120,8 @@ router = APIRouter(prefix="", tags=["Apps"])
 
 
 # Initialize clients
-apps_client: Optional[AppsClient] = None
-app_exposer_client: Optional[AppExposerClient] = None
+apps_client: AppsClient | None = None
+app_exposer_client: AppExposerClient | None = None
 
 if config.apps_base_url:
     apps_client = AppsClient(base_url=config.apps_base_url)
@@ -232,7 +230,7 @@ def parse_date_filter(filter_expr: str) -> tuple[str, datetime]:
     # PostgreSQL stores timestamp without time zone, so we need naive datetimes
     if dt.tzinfo is not None:
         # Convert to UTC then strip timezone info
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
 
     # Map == to SQL =
     sql_operator = "=" if operator == "==" else operator
@@ -254,7 +252,7 @@ def compare_dates(app_date: datetime, operator: str, filter_date: datetime) -> b
     """
     # Convert app_date to naive UTC if it has timezone info
     if app_date.tzinfo is not None:
-        app_date = app_date.astimezone(timezone.utc).replace(tzinfo=None)
+        app_date = app_date.astimezone(UTC).replace(tzinfo=None)
 
     if operator == ">":
         return app_date > filter_date
@@ -740,7 +738,7 @@ async def get_app_status(
 async def control_app(
     analysis_id: str,
     operation: str,
-    _user: Any = Depends(get_current_user),
+    user: Any = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Control a running analysis (extend time, save & exit, exit).
 
@@ -751,6 +749,8 @@ async def control_app(
         analysis_id: Analysis UUID (returned by the `/app/launch/{system_id}/{app_id}` endpoint)
         operation: Control operation to perform (extend_time, save_and_exit, or exit)
     """
+    del user  # Unused but required for authentication
+
     if not app_exposer_client:
         raise ServiceUnavailableError("App-exposer")
 

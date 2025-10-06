@@ -11,3 +11,8 @@ wheels/
 
 # Configuration files (may contain secrets)
 config.json
+
+# Claude Code - user-specific settings
+.claude/settings.local.json
+.claude/*.local.*
+.claude/hooks/

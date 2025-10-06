@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any
 from urllib.parse import urljoin
 
 import httpx
@@ -75,7 +75,7 @@ async def get_access_token(
     username: str,
     password: str,
     ssl_verify: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     token_url = urljoin(
         keycloak_server_url, f"realms/{keycloak_realm}/protocol/openid-connect/token"
     )

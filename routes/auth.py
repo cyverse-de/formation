@@ -4,8 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from dependencies import get_current_user, extract_user_from_jwt
-
+from dependencies import extract_user_from_jwt, get_current_user
 
 router = APIRouter(prefix="", tags=["Authentication"])
 

@@ -2,19 +2,16 @@
 
 import asyncio
 import mimetypes
-import sys
 from typing import Any
 
-import psycopg
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from fastapi.responses import Response as FastAPIResponse
 
 import ds
 from config import config
-from dependencies import get_current_user, extract_user_from_jwt
+from dependencies import extract_user_from_jwt, get_current_user
 from exceptions import PermissionDeniedError, ResourceNotFoundError
-
 
 router = APIRouter(prefix="", tags=["Data Store"])
 

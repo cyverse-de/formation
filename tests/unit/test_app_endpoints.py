@@ -1,9 +1,10 @@
 """Unit tests for app endpoints."""
 
 import os
-import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
-from unittest.mock import AsyncMock, patch, MagicMock
+
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -344,7 +345,7 @@ class TestLaunchApp:
     def test_launch_app_service_error(self, client, mock_token_verification):
         """Test launch with apps service error."""
         app_id = str(uuid4())
-        from httpx import HTTPStatusError, Response, Request
+        from httpx import HTTPStatusError, Request, Response
 
         with patch("clients.AppsClient.submit_analysis", new_callable=AsyncMock) as mock_submit:
             mock_request = MagicMock(spec=Request)
@@ -425,7 +426,7 @@ class TestGetAppStatus:
     def test_get_status_not_found(self, client, mock_token_verification):
         """Test status for non-existent analysis."""
         analysis_id = str(uuid4())
-        from httpx import HTTPStatusError, Response, Request
+        from httpx import HTTPStatusError, Request, Response
 
         with patch("clients.AppsClient.get_analysis", new_callable=AsyncMock) as mock_get:
             mock_request = MagicMock(spec=Request)
@@ -523,7 +524,7 @@ class TestControlApp:
     def test_control_analysis_not_found(self, client, mock_token_verification):
         """Test control on non-existent analysis."""
         analysis_id = str(uuid4())
-        from httpx import HTTPStatusError, Response, Request
+        from httpx import HTTPStatusError, Request, Response
 
         with patch("clients.AppExposerClient.extend_time_limit", new_callable=AsyncMock) as mock_extend:
             mock_request = MagicMock(spec=Request)
@@ -598,7 +599,7 @@ class TestGetAppConfig:
     def test_get_config_not_found(self, client, mock_token_verification):
         """Test config retrieval for non-existent app."""
         app_id = str(uuid4())
-        from httpx import HTTPStatusError, Response, Request
+        from httpx import HTTPStatusError, Request, Response
 
         with patch("clients.AppsClient.get_app", new_callable=AsyncMock) as mock_get:
             mock_request = MagicMock(spec=Request)

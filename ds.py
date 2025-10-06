@@ -6,7 +6,7 @@ from irods.session import iRODSSession
 from irods.user import iRODSUser
 
 
-class DataStoreAPI(object):
+class DataStoreAPI:
     _user_type = "rodsuser"
 
     def __init__(self, host: str, port: str, user: str, password: str, zone: str):
@@ -119,20 +119,20 @@ class DataStoreAPI(object):
     def get_file_contents(self, path: str, offset: int = 0, limit: int | None = None) -> dict:
         """Get contents of an iRODS data object with optional paging."""
         data_obj = self.session.data_objects.get(path)
-        
+
         with data_obj.open('r') as f:
             if offset > 0:
                 f.seek(offset)
-            
+
             if limit:
                 content = f.read(limit)
             else:
                 content = f.read()
-        
+
         file_size = getattr(data_obj, 'size', None)
         if file_size is None:
             file_size = len(content) + offset
-        
+
         return {
             "content": content,
             "offset": offset,
@@ -143,7 +143,7 @@ class DataStoreAPI(object):
         """Get AVU metadata for an iRODS data object formatted as response headers."""
         data_obj = self.session.data_objects.get(path)
         headers = {}
-        
+
         try:
             metadata = data_obj.metadata.items()
             for avu in metadata:
@@ -157,13 +157,13 @@ class DataStoreAPI(object):
         except Exception:
             # If metadata retrieval fails, return empty headers
             pass
-            
+
         return headers
 
     def get_collection_metadata(self, path: str, delimiter: str = ",") -> dict[str, str]:
         """Get AVU metadata for an iRODS collection formatted as response headers."""
         headers = {}
-        
+
         try:
             collection = self.session.collections.get(path)
             if collection is not None:
@@ -179,5 +179,5 @@ class DataStoreAPI(object):
         except Exception:
             # If metadata retrieval fails, return empty headers
             pass
-            
+
         return headers

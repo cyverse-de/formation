@@ -19,6 +19,13 @@
 * Use 'uv' for building, running, and managing Python projects.
 * If available, use podman when building images instead of Docker.
 
+# Code Quality and Linting
+* After editing Python files, run 'uv run ruff check --fix <file>' to auto-fix linting issues.
+* When IDE diagnostics are visible (unused imports, unused variables, type errors), proactively fix them before completing the task.
+* Remove unused imports and variables immediately when they're detected.
+* For required-but-unused parameters (e.g., in FastAPI dependencies), use explicit 'del variable' statements instead of underscore prefixes to satisfy linters.
+* Prefer fixing code quality issues proactively rather than waiting for the user to request fixes.
+
 # Other important projects
 * portal-conductor: Usually available at ../portal-conductor/. Provides an API for the portal.
 * apps: Usually available at ../apps. Provides an API for Discovery Environment app information and operations.
