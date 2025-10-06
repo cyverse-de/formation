@@ -1,6 +1,7 @@
 """Main FastAPI application module."""
 
 import sys
+import traceback
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -109,7 +110,10 @@ async def exception_handling_middleware(
     try:
         return await call_next(request)
     except Exception as e:
-        print(f"Unhandled exception: {str(e)}", file=sys.stderr)
+        print(
+            f"Unhandled exception ({e.__class__.__name__}): {str(e)}", file=sys.stderr
+        )
+        print(traceback.format_exc(), file=sys.stderr)
         return JSONResponse(
             content={"detail": "Internal server error", "error": str(e)},
             status_code=500,
