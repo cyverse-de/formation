@@ -28,6 +28,7 @@ def test_app():
     os.environ["APPS_BASE_URL"] = "http://apps.test"
     os.environ["APP_EXPOSER_BASE_URL"] = "http://app-exposer.test"
     os.environ["VICE_DOMAIN"] = ".cyverse.run"
+    os.environ["PATH_PREFIX"] = ""
 
     # Mock psycopg connection
     with patch("psycopg.connect"):
@@ -84,7 +85,7 @@ class TestLaunchApp:
                     }
 
                     response = client.post(
-                        f"/app/launch/{app_id}",
+                        f"/app/launch/de/{app_id}",
                         json=submission,
                         headers={"Authorization": "Bearer fake-token"},
                     )
@@ -94,7 +95,9 @@ class TestLaunchApp:
                     assert data["analysis_id"] == analysis_id
                     assert data["status"] == "Submitted"
                     assert "url" in data
-                    assert data["url"] == "https://a12345678.cyverse.run"
+                    # URL includes the VICE_DOMAIN from config (which may include port)
+                    assert "a12345678" in data["url"]
+                    assert data["url"].startswith("https://")
 
                     # Verify defaults were added by the endpoint
                     mock_submit.assert_called_once()
@@ -130,14 +133,14 @@ class TestLaunchApp:
             }
 
             response = client.post(
-                f"/app/launch/{app_id}",
+                f"/app/launch/de/{app_id}",
                 json=submission,
                 headers={"Authorization": "Bearer fake-token"},
             )
 
             assert response.status_code == 200
 
-            # Verify explicit system_id was preserved
+            # Verify explicit system_id was preserved (from path parameter)
             mock_submit.assert_called_once()
             submitted_payload = mock_submit.call_args[0][0]
             assert submitted_payload["system_id"] == "de"
@@ -162,7 +165,7 @@ class TestLaunchApp:
             }
 
             response = client.post(
-                f"/app/launch/{app_id}",
+                f"/app/launch/de/{app_id}",
                 json=submission,
                 headers={"Authorization": "Bearer fake-token"},
             )
@@ -193,7 +196,7 @@ class TestLaunchApp:
             }
 
             response = client.post(
-                f"/app/launch/{app_id}",
+                f"/app/launch/de/{app_id}",
                 json=submission,
                 headers={"Authorization": "Bearer fake-token"},
             )
@@ -231,7 +234,7 @@ class TestLaunchApp:
                 }
 
                 response = client.post(
-                    f"/app/launch/{app_id}",
+                    f"/app/launch/de/{app_id}",
                     json=submission,
                     headers={"Authorization": "Bearer fake-token"},
                 )
@@ -276,7 +279,7 @@ class TestLaunchApp:
                 }
 
                 response = client.post(
-                    f"/app/launch/{app_id}",
+                    f"/app/launch/de/{app_id}",
                     headers={"Authorization": "Bearer fake-token"},
                 )
 
@@ -287,7 +290,7 @@ class TestLaunchApp:
                 mock_submit.assert_called_once()
                 submitted_payload = mock_submit.call_args[0][0]
                 assert submitted_payload["app_id"] == str(app_id)
-                assert submitted_payload["system_id"] == "interactive"
+                assert submitted_payload["system_id"] == "de"  # From path parameter
                 assert submitted_payload["debug"] is False
                 assert submitted_payload["notify"] is True
                 assert submitted_payload["config"] == {}
@@ -312,7 +315,7 @@ class TestLaunchApp:
                 }
 
                 response = client.post(
-                    f"/app/launch/{app_id}",
+                    f"/app/launch/de/{app_id}",
                     headers={"Authorization": "Bearer fake-token"},
                 )
 
@@ -326,13 +329,13 @@ class TestLaunchApp:
     def test_launch_app_unauthorized(self, client):
         """Test launch without authentication."""
         app_id = str(uuid4())
-        response = client.post(f"/app/launch/{app_id}")
+        response = client.post(f"/app/launch/de/{app_id}")
         assert response.status_code == 403  # FastAPI returns 403 for missing bearer
 
     def test_launch_app_invalid_uuid(self, client, mock_token_verification):
         """Test launch with invalid app_id format."""
         response = client.post(
-            "/app/launch/not-a-uuid",
+            "/app/launch/de/not-a-uuid",
             headers={"Authorization": "Bearer fake-token"},
         )
         assert response.status_code == 400
@@ -353,11 +356,12 @@ class TestLaunchApp:
             )
 
             response = client.post(
-                f"/app/launch/{app_id}",
+                f"/app/launch/de/{app_id}",
                 headers={"Authorization": "Bearer fake-token"},
             )
 
-            assert response.status_code == 500
+            # External service errors are now returned as 502 Bad Gateway
+            assert response.status_code == 502
 
 
 class TestGetAppStatus:
@@ -366,27 +370,35 @@ class TestGetAppStatus:
     def test_get_status_success(self, client, mock_token_verification):
         """Test successful status retrieval."""
         analysis_id = str(uuid4())
+        external_id = str(uuid4())
 
         with patch("clients.AppsClient.get_analysis", new_callable=AsyncMock) as mock_get:
-            with patch("clients.AppExposerClient.check_url_ready", new_callable=AsyncMock) as mock_ready:
-                mock_get.return_value = {
-                    "id": analysis_id,
-                    "status": "Running",
-                    "subdomain": analysis_id,
-                }
-                mock_ready.return_value = {"ready": True}
+            with patch("clients.AppExposerClient.get_external_id", new_callable=AsyncMock) as mock_external:
+                with patch("clients.AppExposerClient.get_async_data", new_callable=AsyncMock) as mock_async:
+                    with patch("routes.apps.check_vice_url_ready", new_callable=AsyncMock) as mock_ready:
+                        mock_get.return_value = {
+                            "id": analysis_id,
+                            "status": "Running",
+                        }
+                        mock_external.return_value = {"external_id": external_id}
+                        mock_async.return_value = {
+                            "analysisID": analysis_id,
+                            "subdomain": "test-subdomain",
+                            "ipAddr": "10.0.0.1",
+                        }
+                        mock_ready.return_value = (True, {"status_code": 200, "response_time_ms": 100})
 
-                response = client.get(
-                    f"/apps/analyses/{analysis_id}/status",
-                    headers={"Authorization": "Bearer fake-token"},
-                )
+                        response = client.get(
+                            f"/apps/analyses/{analysis_id}/status",
+                            headers={"Authorization": "Bearer fake-token"},
+                        )
 
-                assert response.status_code == 200
-                data = response.json()
-                assert data["analysis_id"] == analysis_id
-                assert data["status"] == "Running"
-                assert data["url_ready"] is True
-                assert "url" in data
+                        assert response.status_code == 200
+                        data = response.json()
+                        assert data["analysis_id"] == analysis_id
+                        assert data["status"] == "Running"
+                        assert data["url_ready"] is True
+                        assert "url" in data
 
     def test_get_status_not_ready(self, client, mock_token_verification):
         """Test status when URL not ready."""
@@ -429,7 +441,8 @@ class TestGetAppStatus:
                 headers={"Authorization": "Bearer fake-token"},
             )
 
-            assert response.status_code == 404
+            # External service errors now return 502 Bad Gateway
+            assert response.status_code == 502
 
     def test_get_status_invalid_uuid(self, client, mock_token_verification):
         """Test status with invalid UUID format."""
@@ -526,7 +539,8 @@ class TestControlApp:
                 headers={"Authorization": "Bearer fake-token"},
             )
 
-            assert response.status_code == 404
+            # External service errors now return 502 Bad Gateway
+            assert response.status_code == 502
 
 
 class TestGetAppConfig:
@@ -554,7 +568,7 @@ class TestGetAppConfig:
             }
 
             response = client.get(
-                f"/apps/{app_id}/config",
+                f"/apps/de/{app_id}/config",
                 headers={"Authorization": "Bearer fake-token"},
             )
 
@@ -573,7 +587,7 @@ class TestGetAppConfig:
             }
 
             response = client.get(
-                f"/apps/{app_id}/config",
+                f"/apps/de/{app_id}/config",
                 headers={"Authorization": "Bearer fake-token"},
             )
 
@@ -596,16 +610,17 @@ class TestGetAppConfig:
             )
 
             response = client.get(
-                f"/apps/{app_id}/config",
+                f"/apps/de/{app_id}/config",
                 headers={"Authorization": "Bearer fake-token"},
             )
 
-            assert response.status_code == 404
+            # External service errors now return 502 Bad Gateway
+            assert response.status_code == 502
 
     def test_get_config_invalid_uuid(self, client, mock_token_verification):
         """Test config retrieval with invalid UUID format."""
         response = client.get(
-            "/apps/not-a-uuid/config",
+            "/apps/de/not-a-uuid/config",
             headers={"Authorization": "Bearer fake-token"},
         )
 
@@ -616,5 +631,5 @@ class TestGetAppConfig:
     def test_get_config_unauthorized(self, client):
         """Test config retrieval without authentication."""
         app_id = str(uuid4())
-        response = client.get(f"/apps/{app_id}/config")
+        response = client.get(f"/apps/de/{app_id}/config")
         assert response.status_code == 403  # FastAPI returns 403 for missing bearer

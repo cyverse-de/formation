@@ -26,12 +26,12 @@ class TestAppsClient:
         }
 
         httpx_mock.add_response(
-            url=f"http://apps.test/apps/interactive/{app_id}?user={username}",
+            url=f"http://apps.test/apps/de/{app_id}?user={username}",
             json=expected_response,
             status_code=200,
         )
 
-        result = await client.get_app(app_id, username)
+        result = await client.get_app(app_id, username, system_id="de")
         assert result == expected_response
 
     @pytest.mark.asyncio
@@ -41,12 +41,12 @@ class TestAppsClient:
         username = "testuser"
 
         httpx_mock.add_response(
-            url=f"http://apps.test/apps/interactive/{app_id}?user={username}",
+            url=f"http://apps.test/apps/de/{app_id}?user={username}",
             status_code=404,
         )
 
         with pytest.raises(Exception):  # httpx.HTTPStatusError
-            await client.get_app(app_id, username)
+            await client.get_app(app_id, username, system_id="de")
 
     @pytest.mark.asyncio
     async def test_submit_analysis_success(self, client, httpx_mock):
@@ -78,22 +78,27 @@ class TestAppsClient:
     @pytest.mark.asyncio
     async def test_get_analysis_success(self, client, httpx_mock):
         """Test successful analysis retrieval."""
+        import json
+
         analysis_id = uuid4()
         username = "testuser"
-        expected_response = {
+        expected_analysis = {
             "id": str(analysis_id),
             "name": "Test Analysis",
             "status": "Running",
         }
 
+        # The client now uses filter query param instead of direct ID path
+        filter_param = json.dumps([{"field": "id", "value": str(analysis_id)}])
+
         httpx_mock.add_response(
-            url=f"http://apps.test/analyses/{analysis_id}?user={username}",
-            json=expected_response,
+            url=f"http://apps.test/analyses?user={username}&filter={filter_param}",
+            json={"analyses": [expected_analysis]},
             status_code=200,
         )
 
         result = await client.get_analysis(analysis_id, username)
-        assert result == expected_response
+        assert result == expected_analysis
 
 
 class TestAppExposerClient:

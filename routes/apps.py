@@ -9,11 +9,17 @@ from typing import Any, Optional
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from clients import AppExposerClient, AppsClient
 from config import config
 from dependencies import extract_user_from_jwt, get_current_user
+from exceptions import (
+    ExternalServiceError,
+    ResourceNotFoundError,
+    ServiceUnavailableError,
+    ValidationError,
+)
 
 # Simple in-memory cache for VICE URL checks
 # Format: {url: (timestamp, ready, details)}
@@ -297,130 +303,124 @@ async def list_apps(
     """
     # Validate pagination parameters
     if limit < 1 or limit > 1000:
-        raise HTTPException(status_code=400, detail="Limit must be between 1 and 1000")
+        raise ValidationError("Limit must be between 1 and 1000", field="limit")
     if offset < 0:
-        raise HTTPException(status_code=400, detail="Offset must be non-negative")
+        raise ValidationError("Offset must be non-negative", field="offset")
 
     if not apps_client:
-        raise HTTPException(status_code=503, detail="Apps service not configured")
+        raise ServiceUnavailableError("Apps")
 
     username = extract_user_from_jwt(current_user)
 
-    try:
-        # Normalize job type (e.g., "VICE" -> "Interactive")
-        normalized_job_type = normalize_job_type(job_type)
+    # Normalize job type (e.g., "VICE" -> "Interactive")
+    normalized_job_type = normalize_job_type(job_type)
 
-        # Build search term from name filter if provided
-        search_term = name if name else None
+    # Build search term from name filter if provided
+    search_term = name if name else None
 
-        # Parse date filters if provided
-        integration_date_filter = None
-        edited_date_filter = None
-        if integration_date:
-            integration_date_filter = parse_date_filter(integration_date)
-        if edited_date:
-            edited_date_filter = parse_date_filter(edited_date)
+    # Parse date filters if provided
+    integration_date_filter = None
+    edited_date_filter = None
+    if integration_date:
+        integration_date_filter = parse_date_filter(integration_date)
+    if edited_date:
+        edited_date_filter = parse_date_filter(edited_date)
 
-        # Get apps from apps service with a larger limit to allow for client-side filtering
-        # We'll filter and paginate on the client side
-        response = await apps_client.list_apps(
-            username=username,
-            limit=1000,  # Get more to allow filtering
-            offset=0,
-            search=search_term,
+    # Get apps from apps service with a larger limit to allow for client-side filtering
+    # We'll filter and paginate on the client side
+    response = await apps_client.list_apps(
+        username=username,
+        limit=1000,  # Get more to allow filtering
+        offset=0,
+        search=search_term,
+    )
+
+    apps = response.get("apps", [])
+
+    # Filter by job type if specified (using normalized value)
+    if normalized_job_type:
+        apps = [
+            app
+            for app in apps
+            if app.get("overall_job_type") == normalized_job_type
+        ]
+
+    # Apply client-side filters
+    if description:
+        apps = [
+            app
+            for app in apps
+            if description.lower() in (app.get("description") or "").lower()
+        ]
+
+    if integrator:
+        # Strip user suffix if provided
+        integrator_search = integrator
+        if config.user_suffix and integrator_search.endswith(config.user_suffix):
+            integrator_search = integrator_search[: -len(config.user_suffix)]
+
+        apps = [
+            app
+            for app in apps
+            if integrator_search.lower()
+            in (app.get("integrator_name") or "").lower()
+        ]
+
+    if integration_date_filter:
+        operator, dt = integration_date_filter
+        apps = [
+            app
+            for app in apps
+            if app.get("integration_date")
+            and compare_dates(
+                datetime.fromisoformat(
+                    app["integration_date"].replace("Z", "+00:00")
+                ),
+                operator,
+                dt,
+            )
+        ]
+
+    if edited_date_filter:
+        operator, dt = edited_date_filter
+        apps = [
+            app
+            for app in apps
+            if app.get("edited_date")
+            and compare_dates(
+                datetime.fromisoformat(app["edited_date"].replace("Z", "+00:00")),
+                operator,
+                dt,
+            )
+        ]
+
+    # Apply pagination after filtering
+    total = len(apps)
+    apps = apps[offset : offset + limit]
+
+    # Transform to formation's simpler format
+    formatted_apps = []
+    for app in apps:
+        # Remove user suffix from integrator name
+        integrator_name = app.get("integrator_name")
+        if integrator_name and config.user_suffix:
+            if integrator_name.endswith(config.user_suffix):
+                integrator_name = integrator_name[: -len(config.user_suffix)]
+
+        formatted_apps.append(
+            {
+                "id": app.get("id"),
+                "name": app.get("name"),
+                "description": app.get("description"),
+                "version": app.get("version"),
+                "integrator_username": integrator_name,
+                "integration_date": app.get("integration_date"),
+                "edited_date": app.get("edited_date"),
+                "system_id": app.get("system_id"),
+            }
         )
 
-        apps = response.get("apps", [])
-
-        # Filter by job type if specified (using normalized value)
-        if normalized_job_type:
-            apps = [
-                app
-                for app in apps
-                if app.get("overall_job_type") == normalized_job_type
-            ]
-
-        # Apply client-side filters
-        if description:
-            apps = [
-                app
-                for app in apps
-                if description.lower() in (app.get("description") or "").lower()
-            ]
-
-        if integrator:
-            # Strip user suffix if provided
-            integrator_search = integrator
-            if config.user_suffix and integrator_search.endswith(config.user_suffix):
-                integrator_search = integrator_search[: -len(config.user_suffix)]
-
-            apps = [
-                app
-                for app in apps
-                if integrator_search.lower()
-                in (app.get("integrator_name") or "").lower()
-            ]
-
-        if integration_date_filter:
-            operator, dt = integration_date_filter
-            apps = [
-                app
-                for app in apps
-                if app.get("integration_date")
-                and compare_dates(
-                    datetime.fromisoformat(
-                        app["integration_date"].replace("Z", "+00:00")
-                    ),
-                    operator,
-                    dt,
-                )
-            ]
-
-        if edited_date_filter:
-            operator, dt = edited_date_filter
-            apps = [
-                app
-                for app in apps
-                if app.get("edited_date")
-                and compare_dates(
-                    datetime.fromisoformat(app["edited_date"].replace("Z", "+00:00")),
-                    operator,
-                    dt,
-                )
-            ]
-
-        # Apply pagination after filtering
-        total = len(apps)
-        apps = apps[offset : offset + limit]
-
-        # Transform to formation's simpler format
-        formatted_apps = []
-        for app in apps:
-            # Remove user suffix from integrator name
-            integrator_name = app.get("integrator_name")
-            if integrator_name and config.user_suffix:
-                if integrator_name.endswith(config.user_suffix):
-                    integrator_name = integrator_name[: -len(config.user_suffix)]
-
-            formatted_apps.append(
-                {
-                    "id": app.get("id"),
-                    "name": app.get("name"),
-                    "description": app.get("description"),
-                    "version": app.get("version"),
-                    "integrator_username": integrator_name,
-                    "integration_date": app.get("integration_date"),
-                    "edited_date": app.get("edited_date"),
-                    "system_id": app.get("system_id"),
-                }
-            )
-
-        return {"total": total, "apps": formatted_apps}
-
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except httpx.HTTPError as e:
-        raise HTTPException(status_code=503, detail=f"Apps service error: {str(e)}")
+    return {"total": total, "apps": formatted_apps}
 
 
 @router.get("/apps/{system_id}/{app_id}/config")
@@ -440,35 +440,22 @@ async def get_app_config(
         app_id: App UUID
     """
     if not apps_client:
-        raise HTTPException(status_code=503, detail="Apps service not configured")
+        raise ServiceUnavailableError("Apps")
 
     username = extract_user_from_jwt(user)
 
+    # Convert string to UUID
     try:
-        # Convert string to UUID
         app_uuid = UUID(app_id)
-
-        # Get full app definition from apps service
-        app_data = await apps_client.get_app(app_uuid, username, system_id=system_id)
-
-        # Extract and return just the config section
-        # The config section contains parameter definitions needed for launching
-        config_section = app_data.get("config", {})
-
-        return config_section
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid app ID format")
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            raise HTTPException(status_code=404, detail="App not found")
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"Apps service error: {e.response.text}",
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to retrieve app config: {str(e)}"
-        )
+        raise ValidationError("Invalid app ID format", field="app_id")
+
+    # Get full app definition from apps service
+    app_data = await apps_client.get_app(app_uuid, username, system_id=system_id)
+
+    # Extract and return just the config section
+    # The config section contains parameter definitions needed for launching
+    return app_data.get("config", {})
 
 
 @router.post("/app/launch/{system_id}/{app_id}")
@@ -495,7 +482,7 @@ async def launch_app(
                      at /{output_zone}/home/{username}/analyses/{analysis-name}
     """
     if not apps_client:
-        raise HTTPException(status_code=503, detail="Apps service not configured")
+        raise ServiceUnavailableError("Apps")
 
     # Use configured output zone if not provided
     if output_zone is None:
@@ -503,179 +490,171 @@ async def launch_app(
 
     username = extract_user_from_jwt(user)
 
-    # Validate app_id format (outside try block to avoid catching it)
+    # Validate app_id format
     try:
         UUID(app_id)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid app ID format")
+        raise ValidationError("Invalid app ID format", field="app_id")
 
-    try:
-        # Create empty submission if body is None
-        if submission is None:
-            submission = {}
+    # Create empty submission if body is None
+    if submission is None:
+        submission = {}
 
-        # Convert to regular dict for internal processing
-        submission_dict: dict[str, Any] = dict(submission)
+    # Convert to regular dict for internal processing
+    submission_dict: dict[str, Any] = dict(submission)
 
-        # Inject app_id from path parameter
-        submission_dict["app_id"] = app_id
+    # Inject app_id from path parameter
+    submission_dict["app_id"] = app_id
 
-        # Add defaults for optional fields
-        # email: Extract from JWT token if not provided, or if provided value is placeholder
-        email_from_body = submission_dict.get("email", "")
-        if not email_from_body or email_from_body == "string":
-            # Try to get email from JWT token, fall back to constructing from username
-            email = user.get("email")
-            if not email:
-                # Construct email from username if not in token
-                submission_dict["email"] = f"{username}{config.user_suffix}"
-            else:
-                submission_dict["email"] = email
+    # Add defaults for optional fields
+    # email: Extract from JWT token if not provided, or if provided value is placeholder
+    email_from_body = submission_dict.get("email", "")
+    if not email_from_body or email_from_body == "string":
+        # Try to get email from JWT token, fall back to constructing from username
+        email = user.get("email")
+        if not email:
+            # Construct email from username if not in token
+            submission_dict["email"] = f"{username}{config.user_suffix}"
+        else:
+            submission_dict["email"] = email
 
-        # system_id: Use the provided system_id parameter if not in submission body
-        system_id_from_body = submission_dict.get("system_id", "")
-        if not system_id_from_body or system_id_from_body == "string":
-            submission_dict["system_id"] = system_id
+    # system_id: Use the provided system_id parameter if not in submission body
+    system_id_from_body = submission_dict.get("system_id", "")
+    if not system_id_from_body or system_id_from_body == "string":
+        submission_dict["system_id"] = system_id
 
-        # debug: Default to False (don't retain inputs for debugging)
-        if "debug" not in submission_dict:
-            submission_dict["debug"] = False
+    # debug: Default to False (don't retain inputs for debugging)
+    if "debug" not in submission_dict:
+        submission_dict["debug"] = False
 
-        # notify: Default to True (send email notifications on completion)
-        if "notify" not in submission_dict:
-            submission_dict["notify"] = True
+    # notify: Default to True (send email notifications on completion)
+    if "notify" not in submission_dict:
+        submission_dict["notify"] = True
 
-        # config: Default to empty dict (no parameter overrides)
-        if "config" not in submission_dict:
-            submission_dict["config"] = {}
+    # config: Default to empty dict (no parameter overrides)
+    if "config" not in submission_dict:
+        submission_dict["config"] = {}
 
-        # name: Generate descriptive name if not provided or if placeholder
-        name_from_body = submission_dict.get("name", "")
-        if not name_from_body or name_from_body == "string":
-            # Fetch app details to get app name (already validated above)
-            app_id_for_name = submission_dict.get("app_id")
-            if app_id_for_name:
-                try:
-                    app_data = await apps_client.get_app(
-                        UUID(app_id_for_name), username, system_id=system_id
-                    )
-                    app_name = app_data.get("name", "analysis")
-                    # Clean app name: lowercase, replace non-alphanumeric with hyphens
-                    app_name_clean = re.sub(
-                        r"[^a-z0-9-]+", "-", app_name.lower()
-                    ).strip("-")
-                except Exception:
-                    # If we can't fetch app name, use generic name
-                    app_name_clean = "analysis"
-            else:
-                app_name_clean = "analysis"
-
-            # Generate timestamp
-            timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-            submission_dict["name"] = f"{app_name_clean}-{timestamp}"
-
-        # output_dir: Generate default if not provided or if placeholder
-        output_dir_from_body = submission_dict.get("output_dir", "")
-        if not output_dir_from_body or output_dir_from_body == "string":
-            # Generate default output directory based on username and analysis name
-            analysis_name = submission_dict.get("name", "analysis")
-            # Default output dir format: /{output_zone}/home/{username}/analyses/{analysis-name}
-            submission_dict["output_dir"] = (
-                f"/{output_zone}/home/{username}/analyses/{analysis_name}"
-            )
-
-        # requirements: Remove if it's a placeholder value
-        requirements_from_body = submission_dict.get("requirements", [])
-        if requirements_from_body and isinstance(requirements_from_body, list):
-            # Check if it's the placeholder from Swagger UI (has all zero values)
-            if len(requirements_from_body) > 0:
-                first_req = requirements_from_body[0]
-                if isinstance(first_req, dict) and all(
-                    first_req.get(k) == 0 or first_req.get(k) == 0.0
-                    for k in [
-                        "step_number",
-                        "min_cpu_cores",
-                        "max_cpu_cores",
-                        "min_memory_limit",
-                    ]
-                ):
-                    # It's a placeholder, remove it so apps service uses app defaults
-                    submission_dict.pop("requirements", None)
-
-        # Extract email for query parameter (apps service expects it in query params, not body)
-        email_for_query = str(submission_dict.pop("email"))
-
-        response = await apps_client.submit_analysis(
-            submission_dict, username, email_for_query
-        )
-
-        # Extract analysis ID
-        analysis_id = response.get("id")
-
-        # Construct minimal response
-        result = {
-            "analysis_id": analysis_id,
-            "name": response.get("name", submission_dict.get("name", "Unnamed")),
-            "status": response.get("status", "Submitted"),
-        }
-
-        # Try to get subdomain for URL (with retries since it's generated asynchronously)
-        if app_exposer_client:
+    # name: Generate descriptive name if not provided or if placeholder
+    name_from_body = submission_dict.get("name", "")
+    if not name_from_body or name_from_body == "string":
+        # Fetch app details to get app name (already validated above)
+        app_id_for_name = submission_dict.get("app_id")
+        if app_id_for_name:
             try:
-                # Get external ID from app-exposer
-                external_id_response = await app_exposer_client.get_external_id(
-                    UUID(analysis_id)
+                app_data = await apps_client.get_app(
+                    UUID(app_id_for_name), username, system_id=system_id
                 )
-                external_id = external_id_response.get("external_id")
+                app_name = app_data.get("name", "analysis")
+                # Clean app name: lowercase, replace non-alphanumeric with hyphens
+                app_name_clean = re.sub(
+                    r"[^a-z0-9-]+", "-", app_name.lower()
+                ).strip("-")
+            except Exception:
+                # If we can't fetch app name, use generic name
+                app_name_clean = "analysis"
+        else:
+            app_name_clean = "analysis"
 
-                if external_id:
-                    # Retry getting async data (deployment may not be ready immediately)
-                    max_retries = 5
-                    retry_delay = 1.0  # seconds
+        # Generate timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        submission_dict["name"] = f"{app_name_clean}-{timestamp}"
 
-                    for attempt in range(max_retries):
-                        try:
-                            async_data = await app_exposer_client.get_async_data(
-                                external_id
-                            )
-                            subdomain = async_data.get("subdomain")
-
-                            if subdomain:
-                                result["url"] = (
-                                    f"https://{subdomain}{config.vice_domain}"
-                                )
-                                break  # Success, exit retry loop
-
-                        except httpx.HTTPStatusError as e:
-                            # 404 means deployment not ready yet, retry
-                            if e.response.status_code == 404:
-                                if attempt < max_retries - 1:
-                                    await asyncio.sleep(retry_delay)
-                                    continue
-                            # Other errors, log and give up
-                            print(
-                                f"Error getting async data: {e.response.status_code}",
-                                file=sys.stderr,
-                            )
-                            break
-                        except Exception as e:
-                            print(
-                                f"Error getting async data: {str(e)}", file=sys.stderr
-                            )
-                            break
-
-            except Exception as e:
-                # If we can't get external ID or subdomain, just omit URL from response
-                print(f"Error getting external ID: {str(e)}", file=sys.stderr)
-
-        return result
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"Apps service error: {e.response.text}",
+    # output_dir: Generate default if not provided or if placeholder
+    output_dir_from_body = submission_dict.get("output_dir", "")
+    if not output_dir_from_body or output_dir_from_body == "string":
+        # Generate default output directory based on username and analysis name
+        analysis_name = submission_dict.get("name", "analysis")
+        # Default output dir format: /{output_zone}/home/{username}/analyses/{analysis-name}
+        submission_dict["output_dir"] = (
+            f"/{output_zone}/home/{username}/analyses/{analysis_name}"
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Launch failed: {str(e)}")
+
+    # requirements: Remove if it's a placeholder value
+    requirements_from_body = submission_dict.get("requirements", [])
+    if requirements_from_body and isinstance(requirements_from_body, list):
+        # Check if it's the placeholder from Swagger UI (has all zero values)
+        if len(requirements_from_body) > 0:
+            first_req = requirements_from_body[0]
+            if isinstance(first_req, dict) and all(
+                first_req.get(k) == 0 or first_req.get(k) == 0.0
+                for k in [
+                    "step_number",
+                    "min_cpu_cores",
+                    "max_cpu_cores",
+                    "min_memory_limit",
+                ]
+            ):
+                # It's a placeholder, remove it so apps service uses app defaults
+                submission_dict.pop("requirements", None)
+
+    # Extract email for query parameter (apps service expects it in query params, not body)
+    email_for_query = str(submission_dict.pop("email"))
+
+    response = await apps_client.submit_analysis(
+        submission_dict, username, email_for_query
+    )
+
+    # Extract analysis ID
+    analysis_id = response.get("id")
+
+    # Construct minimal response
+    result = {
+        "analysis_id": analysis_id,
+        "name": response.get("name", submission_dict.get("name", "Unnamed")),
+        "status": response.get("status", "Submitted"),
+    }
+
+    # Try to get subdomain for URL (with retries since it's generated asynchronously)
+    if app_exposer_client:
+        try:
+            # Get external ID from app-exposer
+            external_id_response = await app_exposer_client.get_external_id(
+                UUID(analysis_id)
+            )
+            external_id = external_id_response.get("external_id")
+
+            if external_id:
+                # Retry getting async data (deployment may not be ready immediately)
+                max_retries = 5
+                retry_delay = 1.0  # seconds
+
+                for attempt in range(max_retries):
+                    try:
+                        async_data = await app_exposer_client.get_async_data(
+                            external_id
+                        )
+                        subdomain = async_data.get("subdomain")
+
+                        if subdomain:
+                            result["url"] = (
+                                f"https://{subdomain}{config.vice_domain}"
+                            )
+                            break  # Success, exit retry loop
+
+                    except httpx.HTTPStatusError as e:
+                        # 404 means deployment not ready yet, retry
+                        if e.response.status_code == 404:
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(retry_delay)
+                                continue
+                        # Other errors, log and give up
+                        print(
+                            f"Error getting async data: {e.response.status_code}",
+                            file=sys.stderr,
+                        )
+                        break
+                    except Exception as e:
+                        print(
+                            f"Error getting async data: {str(e)}", file=sys.stderr
+                        )
+                        break
+
+        except Exception as e:
+            # If we can't get external ID or subdomain, just omit URL from response
+            print(f"Error getting external ID: {str(e)}", file=sys.stderr)
+
+    return result
 
 
 @router.get("/apps/analyses/{analysis_id}/status")
@@ -697,71 +676,64 @@ async def get_app_status(
         analysis_id: Analysis UUID (returned by the `/app/launch/{system_id}/{app_id}` endpoint)
     """
     if not apps_client or not app_exposer_client:
-        raise HTTPException(status_code=503, detail="Required services not configured")
+        raise ServiceUnavailableError("Required services")
 
     username = extract_user_from_jwt(user)
 
+    # Validate analysis_id format
     try:
-        # Get analysis info from apps service
         analysis_uuid = UUID(analysis_id)
-        analysis = await apps_client.get_analysis(analysis_uuid, username)
-
-        # Get subdomain from app-exposer for VICE apps
-        subdomain = None
-        url_ready = False
-        url_check_details = {}
-
-        try:
-            # Get external ID from app-exposer
-            external_id_response = await app_exposer_client.get_external_id(
-                analysis_uuid
-            )
-            external_id = external_id_response.get("external_id")
-
-            if external_id:
-                # Get async data (including subdomain)
-                async_data = await app_exposer_client.get_async_data(external_id)
-                subdomain = async_data.get("subdomain")
-
-                # Check URL readiness by directly probing the VICE URL
-                if subdomain:
-                    url = f"https://{subdomain}{config.vice_domain}"
-                    url_ready, url_check_details = await check_vice_url_ready(url)
-        except httpx.HTTPStatusError as e:
-            # If we get 404, the VICE app may not exist or not be ready yet
-            if e.response.status_code != 404:
-                print(
-                    f"Error getting VICE URL info: {e.response.status_code}",
-                    file=sys.stderr,
-                )
-        except Exception as e:
-            print(f"Error getting VICE URL info: {str(e)}", file=sys.stderr)
-
-        result = {
-            "analysis_id": analysis_id,
-            "status": analysis.get("status", "Unknown"),
-            "url_ready": url_ready,
-        }
-
-        if subdomain:
-            result["url"] = f"https://{subdomain}{config.vice_domain}"
-
-        # Include URL check details if available (status code, response time, errors)
-        if url_check_details:
-            result["url_check_details"] = url_check_details
-
-        return result
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            raise HTTPException(status_code=404, detail="Analysis not found")
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"Service error: {e.response.text}",
-        )
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid analysis ID format")
+        raise ValidationError("Invalid analysis ID format", field="analysis_id")
+
+    # Get analysis info from apps service
+    analysis = await apps_client.get_analysis(analysis_uuid, username)
+
+    # Get subdomain from app-exposer for VICE apps
+    subdomain = None
+    url_ready = False
+    url_check_details = {}
+
+    try:
+        # Get external ID from app-exposer
+        external_id_response = await app_exposer_client.get_external_id(
+            analysis_uuid
+        )
+        external_id = external_id_response.get("external_id")
+
+        if external_id:
+            # Get async data (including subdomain)
+            async_data = await app_exposer_client.get_async_data(external_id)
+            subdomain = async_data.get("subdomain")
+
+            # Check URL readiness by directly probing the VICE URL
+            if subdomain:
+                url = f"https://{subdomain}{config.vice_domain}"
+                url_ready, url_check_details = await check_vice_url_ready(url)
+    except httpx.HTTPStatusError as e:
+        # If we get 404, the VICE app may not exist or not be ready yet
+        if e.response.status_code != 404:
+            print(
+                f"Error getting VICE URL info: {e.response.status_code}",
+                file=sys.stderr,
+            )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Status check failed: {str(e)}")
+        print(f"Error getting VICE URL info: {str(e)}", file=sys.stderr)
+
+    result = {
+        "analysis_id": analysis_id,
+        "status": analysis.get("status", "Unknown"),
+        "url_ready": url_ready,
+    }
+
+    if subdomain:
+        result["url"] = f"https://{subdomain}{config.vice_domain}"
+
+    # Include URL check details if available (status code, response time, errors)
+    if url_check_details:
+        result["url_check_details"] = url_check_details
+
+    return result
 
 
 @router.post("/apps/analyses/{analysis_id}/control")
@@ -780,40 +752,30 @@ async def control_app(
         operation: Control operation to perform (extend_time, save_and_exit, or exit)
     """
     if not app_exposer_client:
-        raise HTTPException(
-            status_code=503, detail="App-exposer service not configured"
-        )
+        raise ServiceUnavailableError("App-exposer")
 
     valid_operations = ["extend_time", "save_and_exit", "exit"]
     if operation not in valid_operations:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid operation. Must be one of: {', '.join(valid_operations)}",
+        raise ValidationError(
+            f"Invalid operation. Must be one of: {', '.join(valid_operations)}",
+            field="operation",
         )
 
+    # Validate analysis_id format
     try:
         analysis_uuid = UUID(analysis_id)
-
-        result: dict[str, Any]
-        if operation == "extend_time":
-            result = await app_exposer_client.extend_time_limit(analysis_uuid)
-            result["operation"] = operation
-        elif operation == "save_and_exit":
-            result = await app_exposer_client.save_and_exit(analysis_uuid)
-            result["operation"] = operation
-        else:  # operation == "exit"
-            result = await app_exposer_client.exit_without_save(analysis_uuid)
-            result["operation"] = operation
-
-        return result
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            raise HTTPException(status_code=404, detail="Analysis not found")
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"Service error: {e.response.text}",
-        )
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid analysis ID format")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Operation failed: {str(e)}")
+        raise ValidationError("Invalid analysis ID format", field="analysis_id")
+
+    result: dict[str, Any]
+    if operation == "extend_time":
+        result = await app_exposer_client.extend_time_limit(analysis_uuid)
+        result["operation"] = operation
+    elif operation == "save_and_exit":
+        result = await app_exposer_client.save_and_exit(analysis_uuid)
+        result["operation"] = operation
+    else:  # operation == "exit"
+        result = await app_exposer_client.exit_without_save(analysis_uuid)
+        result["operation"] = operation
+
+    return result

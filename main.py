@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import auth
 import ds
 from config import config
+from exceptions import FormationException
 from routes import apps, auth as auth_routes, datastore
 
 tags_metadata = [
@@ -59,23 +60,55 @@ app.include_router(auth_routes.router)
 app.include_router(datastore.router)
 
 
+@app.exception_handler(FormationException)
+async def formation_exception_handler(
+    _request: Request, exc: FormationException
+) -> JSONResponse:
+    """Handle custom Formation exceptions."""
+    print(f"{exc.__class__.__name__}: {exc.message}", file=sys.stderr)
+    response_content: dict[str, Any] = {"detail": exc.message}
+    if exc.details:
+        response_content["details"] = exc.details
+    return JSONResponse(content=response_content, status_code=exc.status_code)
+
+
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(
     _request: Request, exc: StarletteHTTPException
 ) -> JSONResponse:
+    """Handle FastAPI HTTPException."""
     print(exc, file=sys.stderr)
     return JSONResponse(content={"detail": exc.detail}, status_code=exc.status_code)
+
+
+@app.exception_handler(httpx.HTTPStatusError)
+async def httpx_exception_handler(
+    _request: Request, exc: httpx.HTTPStatusError
+) -> JSONResponse:
+    """Handle httpx HTTP errors from external services."""
+    print(f"External service error: {exc.response.status_code}", file=sys.stderr)
+    return JSONResponse(
+        content={
+            "detail": f"External service error: {exc.response.text}",
+            "status_code": exc.response.status_code,
+        },
+        status_code=502,  # Bad Gateway for external service errors
+    )
 
 
 @app.middleware("http")
 async def exception_handling_middleware(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
+    """Catch-all middleware for unexpected exceptions."""
     try:
         return await call_next(request)
     except Exception as e:
-        print(str(e), file=sys.stderr)
-        return JSONResponse(content=str(e), status_code=500)
+        print(f"Unhandled exception: {str(e)}", file=sys.stderr)
+        return JSONResponse(
+            content={"detail": "Internal server error", "error": str(e)},
+            status_code=500,
+        )
 
 
 # Initialize datastore with config

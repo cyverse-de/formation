@@ -8,7 +8,7 @@ from uuid import UUID
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
-from routes.apps import parse_date_filter, get_apps_from_db
+from routes.apps import parse_date_filter
 
 
 # Table-driven tests for parse_date_filter
