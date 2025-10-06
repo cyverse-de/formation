@@ -790,36 +790,15 @@ async def get_app_status(
     # Get analysis info from apps service
     analysis = await apps_client.get_analysis(analysis_uuid, username)
 
-    # Get subdomain from app-exposer for VICE apps
-    subdomain = None
+    # Get subdomain from app-exposer for VICE apps (with retries)
+    subdomain = await get_analysis_subdomain(analysis_id)
     url_ready = False
     url_check_details = {}
 
-    try:
-        # Get external ID from app-exposer
-        external_id_response = await app_exposer_client.get_external_id(
-            analysis_uuid
-        )
-        external_id = external_id_response.get("external_id")
-
-        if external_id:
-            # Get async data (including subdomain)
-            async_data = await app_exposer_client.get_async_data(external_id)
-            subdomain = async_data.get("subdomain")
-
-            # Check URL readiness by directly probing the VICE URL
-            if subdomain:
-                url = f"https://{subdomain}{config.vice_domain}"
-                url_ready, url_check_details = await check_vice_url_ready(url)
-    except httpx.HTTPStatusError as e:
-        # If we get 404, the VICE app may not exist or not be ready yet
-        if e.response.status_code != 404:
-            print(
-                f"Error getting VICE URL info: {e.response.status_code}",
-                file=sys.stderr,
-            )
-    except Exception as e:
-        print(f"Error getting VICE URL info: {str(e)}", file=sys.stderr)
+    # Check URL readiness by directly probing the VICE URL
+    if subdomain:
+        url = f"https://{subdomain}{config.vice_domain}"
+        url_ready, url_check_details = await check_vice_url_ready(url)
 
     result = {
         "analysis_id": analysis_id,
