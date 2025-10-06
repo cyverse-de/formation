@@ -116,6 +116,70 @@ async def check_vice_url_ready(url: str) -> tuple[bool, dict[str, Any]]:
     return False, details
 
 
+async def get_analysis_subdomain(
+    analysis_id: str,
+    max_retries: int = 5,
+    retry_delay: float = 1.0,
+) -> str | None:
+    """Get subdomain for a VICE analysis with retries.
+
+    Attempts to retrieve the subdomain from app-exposer for a given analysis ID.
+    Since subdomains are generated asynchronously, this function retries on 404
+    errors to allow time for the deployment to become ready.
+
+    Args:
+        analysis_id: Analysis UUID
+        max_retries: Maximum number of retry attempts (default: 5)
+        retry_delay: Seconds to wait between retries (default: 1.0)
+
+    Returns:
+        Subdomain string if found, None otherwise
+    """
+    if not app_exposer_client:
+        return None
+
+    try:
+        # Get external ID from app-exposer
+        external_id_response = await app_exposer_client.get_external_id(
+            UUID(analysis_id)
+        )
+        external_id = external_id_response.get("external_id")
+
+        if not external_id:
+            return None
+
+        # Retry getting async data (deployment may not be ready immediately)
+        for attempt in range(max_retries):
+            try:
+                async_data = await app_exposer_client.get_async_data(external_id)
+                subdomain = async_data.get("subdomain")
+
+                if subdomain:
+                    return subdomain
+
+            except httpx.HTTPStatusError as e:
+                # 404 means deployment not ready yet, retry
+                if e.response.status_code == 404:
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay)
+                        continue
+                # Other errors, log and give up
+                print(
+                    f"Error getting async data: {e.response.status_code}",
+                    file=sys.stderr,
+                )
+                break
+            except Exception as e:
+                print(f"Error getting async data: {str(e)}", file=sys.stderr)
+                break
+
+    except Exception as e:
+        # If we can't get external ID or subdomain, return None
+        print(f"Error getting external ID: {str(e)}", file=sys.stderr)
+
+    return None
+
+
 router = APIRouter(prefix="", tags=["Apps"])
 
 
@@ -604,53 +668,10 @@ async def launch_app(
     }
 
     # Try to get subdomain for URL (with retries since it's generated asynchronously)
-    if app_exposer_client:
-        try:
-            # Get external ID from app-exposer
-            external_id_response = await app_exposer_client.get_external_id(
-                UUID(analysis_id)
-            )
-            external_id = external_id_response.get("external_id")
-
-            if external_id:
-                # Retry getting async data (deployment may not be ready immediately)
-                max_retries = 5
-                retry_delay = 1.0  # seconds
-
-                for attempt in range(max_retries):
-                    try:
-                        async_data = await app_exposer_client.get_async_data(
-                            external_id
-                        )
-                        subdomain = async_data.get("subdomain")
-
-                        if subdomain:
-                            result["url"] = (
-                                f"https://{subdomain}{config.vice_domain}"
-                            )
-                            break  # Success, exit retry loop
-
-                    except httpx.HTTPStatusError as e:
-                        # 404 means deployment not ready yet, retry
-                        if e.response.status_code == 404:
-                            if attempt < max_retries - 1:
-                                await asyncio.sleep(retry_delay)
-                                continue
-                        # Other errors, log and give up
-                        print(
-                            f"Error getting async data: {e.response.status_code}",
-                            file=sys.stderr,
-                        )
-                        break
-                    except Exception as e:
-                        print(
-                            f"Error getting async data: {str(e)}", file=sys.stderr
-                        )
-                        break
-
-        except Exception as e:
-            # If we can't get external ID or subdomain, just omit URL from response
-            print(f"Error getting external ID: {str(e)}", file=sys.stderr)
+    if analysis_id:
+        subdomain = await get_analysis_subdomain(analysis_id)
+        if subdomain:
+            result["url"] = f"https://{subdomain}{config.vice_domain}"
 
     return result
 
