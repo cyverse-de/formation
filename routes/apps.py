@@ -180,6 +180,128 @@ async def get_analysis_subdomain(
     return None
 
 
+def should_remove_placeholder_requirements(requirements: list | None) -> bool:
+    """Check if requirements list contains placeholder values from Swagger UI.
+
+    Swagger UI generates placeholder requirements with all zero values.
+    These should be removed so the apps service uses the app's defaults.
+
+    Args:
+        requirements: List of requirement dictionaries from request body
+
+    Returns:
+        True if requirements should be removed, False otherwise
+    """
+    if not requirements or not isinstance(requirements, list):
+        return False
+
+    if len(requirements) == 0:
+        return False
+
+    # Check if first requirement has all zero values (Swagger placeholder pattern)
+    first_req = requirements[0]
+    if not isinstance(first_req, dict):
+        return False
+
+    placeholder_fields = [
+        "step_number",
+        "min_cpu_cores",
+        "max_cpu_cores",
+        "min_memory_limit",
+    ]
+
+    return all(
+        first_req.get(k) == 0 or first_req.get(k) == 0.0 for k in placeholder_fields
+    )
+
+
+async def generate_analysis_name(
+    app_id: str | None,
+    username: str,
+    system_id: str,
+) -> str:
+    """Generate a descriptive analysis name based on the app name and timestamp.
+
+    Fetches the app name from the apps service and creates a clean, timestamped
+    analysis name. Falls back to "analysis" if the app name cannot be retrieved.
+
+    Args:
+        app_id: App UUID string
+        username: Username for authentication
+        system_id: System identifier for the app
+
+    Returns:
+        Generated analysis name in format: "{app-name}-{timestamp}"
+    """
+    app_name_clean = "analysis"
+
+    if app_id and apps_client:
+        try:
+            app_data = await apps_client.get_app(
+                UUID(app_id), username, system_id=system_id
+            )
+            app_name = app_data.get("name", "analysis")
+            # Clean app name: lowercase, replace non-alphanumeric with hyphens
+            app_name_clean = re.sub(r"[^a-z0-9-]+", "-", app_name.lower()).strip("-")
+        except Exception:
+            # If we can't fetch app name, use generic name
+            app_name_clean = "analysis"
+
+    # Generate timestamp
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    return f"{app_name_clean}-{timestamp}"
+
+
+def generate_output_directory(
+    output_zone: str,
+    username: str,
+    analysis_name: str,
+) -> str:
+    """Generate default output directory path for an analysis.
+
+    Creates an iRODS path in the format:
+    /{output_zone}/home/{username}/analyses/{analysis-name}
+
+    Args:
+        output_zone: iRODS zone name
+        username: Username for the directory path
+        analysis_name: Name of the analysis
+
+    Returns:
+        Full iRODS path for the analysis output directory
+    """
+    return f"/{output_zone}/home/{username}/analyses/{analysis_name}"
+
+
+def resolve_user_email(
+    email_from_body: str, user: dict[str, Any], username: str
+) -> str:
+    """Resolve the user's email address for analysis submission.
+
+    Email is resolved in priority order:
+    1. If body contains valid email (not empty, not placeholder): use it
+    2. If JWT token contains email: use it
+    3. Otherwise: construct from username + user_suffix
+
+    Args:
+        email_from_body: Email from request body (may be empty or placeholder)
+        user: JWT token user data (may contain email)
+        username: Username for email construction fallback
+
+    Returns:
+        Resolved email address
+    """
+    if not email_from_body or email_from_body == "string":
+        # Try to get email from JWT token, fall back to constructing from username
+        email = user.get("email")
+        if not email:
+            # Construct email from username if not in token
+            return f"{username}{config.user_suffix}"
+        else:
+            return email
+    return email_from_body
+
+
 router = APIRouter(prefix="", tags=["Apps"])
 
 
@@ -571,14 +693,7 @@ async def launch_app(
     # Add defaults for optional fields
     # email: Extract from JWT token if not provided, or if provided value is placeholder
     email_from_body = submission_dict.get("email", "")
-    if not email_from_body or email_from_body == "string":
-        # Try to get email from JWT token, fall back to constructing from username
-        email = user.get("email")
-        if not email:
-            # Construct email from username if not in token
-            submission_dict["email"] = f"{username}{config.user_suffix}"
-        else:
-            submission_dict["email"] = email
+    submission_dict["email"] = resolve_user_email(email_from_body, user, username)
 
     # system_id: Use the provided system_id parameter if not in submission body
     system_id_from_body = submission_dict.get("system_id", "")
@@ -600,55 +715,22 @@ async def launch_app(
     # name: Generate descriptive name if not provided or if placeholder
     name_from_body = submission_dict.get("name", "")
     if not name_from_body or name_from_body == "string":
-        # Fetch app details to get app name (already validated above)
-        app_id_for_name = submission_dict.get("app_id")
-        if app_id_for_name:
-            try:
-                app_data = await apps_client.get_app(
-                    UUID(app_id_for_name), username, system_id=system_id
-                )
-                app_name = app_data.get("name", "analysis")
-                # Clean app name: lowercase, replace non-alphanumeric with hyphens
-                app_name_clean = re.sub(
-                    r"[^a-z0-9-]+", "-", app_name.lower()
-                ).strip("-")
-            except Exception:
-                # If we can't fetch app name, use generic name
-                app_name_clean = "analysis"
-        else:
-            app_name_clean = "analysis"
-
-        # Generate timestamp
-        timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-        submission_dict["name"] = f"{app_name_clean}-{timestamp}"
+        submission_dict["name"] = await generate_analysis_name(
+            submission_dict.get("app_id"), username, system_id
+        )
 
     # output_dir: Generate default if not provided or if placeholder
     output_dir_from_body = submission_dict.get("output_dir", "")
     if not output_dir_from_body or output_dir_from_body == "string":
-        # Generate default output directory based on username and analysis name
         analysis_name = submission_dict.get("name", "analysis")
-        # Default output dir format: /{output_zone}/home/{username}/analyses/{analysis-name}
-        submission_dict["output_dir"] = (
-            f"/{output_zone}/home/{username}/analyses/{analysis_name}"
+        submission_dict["output_dir"] = generate_output_directory(
+            output_zone, username, analysis_name
         )
 
     # requirements: Remove if it's a placeholder value
     requirements_from_body = submission_dict.get("requirements", [])
-    if requirements_from_body and isinstance(requirements_from_body, list):
-        # Check if it's the placeholder from Swagger UI (has all zero values)
-        if len(requirements_from_body) > 0:
-            first_req = requirements_from_body[0]
-            if isinstance(first_req, dict) and all(
-                first_req.get(k) == 0 or first_req.get(k) == 0.0
-                for k in [
-                    "step_number",
-                    "min_cpu_cores",
-                    "max_cpu_cores",
-                    "min_memory_limit",
-                ]
-            ):
-                # It's a placeholder, remove it so apps service uses app defaults
-                submission_dict.pop("requirements", None)
+    if should_remove_placeholder_requirements(requirements_from_body):
+        submission_dict.pop("requirements", None)
 
     # Extract email for query parameter (apps service expects it in query params, not body)
     email_for_query = str(submission_dict.pop("email"))
