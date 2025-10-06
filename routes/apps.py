@@ -607,6 +607,55 @@ async def list_apps(
     return {"total": total, "apps": formatted_apps}
 
 
+@router.get("/apps/analyses/")
+async def list_analyses(
+    status: str = "Running",
+    user: Any = Depends(get_current_user),
+) -> dict[str, Any]:
+    """List analyses for the authenticated user, filtered by status.
+
+    Returns analyses filtered by the specified status. By default, returns only
+    running analyses.
+
+    Args:
+        status: Status filter (default: "Running"). Common values:
+                - "Running": Currently executing analyses
+                - "Completed": Successfully finished analyses
+                - "Failed": Analyses that failed
+                - "Submitted": Queued but not yet running
+                - "Canceled": User-canceled analyses
+
+    Returns:
+        Dictionary with 'analyses' list, where each analysis contains:
+        - analysis_id: Analysis UUID
+        - app_id: App UUID that was launched
+        - system_id: System identifier (e.g., 'de', 'hpc')
+        - status: Current status
+    """
+    if not apps_client:
+        raise ServiceUnavailableError("Apps")
+
+    username = extract_user_from_jwt(user)
+
+    # Get analyses from apps service with status filter
+    result = await apps_client.list_analyses(username, status=status)
+
+    # Extract and format the analyses list
+    analyses = result.get("analyses", [])
+    formatted_analyses = []
+    for analysis in analyses:
+        formatted_analyses.append(
+            {
+                "analysis_id": analysis.get("id"),
+                "app_id": analysis.get("app_id"),
+                "system_id": analysis.get("system_id"),
+                "status": analysis.get("status"),
+            }
+        )
+
+    return {"analyses": formatted_analyses}
+
+
 @router.get("/apps/{system_id}/{app_id}/config")
 async def get_app_config(
     system_id: str,

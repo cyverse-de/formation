@@ -634,3 +634,121 @@ class TestGetAppConfig:
         app_id = str(uuid4())
         response = client.get(f"/apps/de/{app_id}/config")
         assert response.status_code == 403  # FastAPI returns 403 for missing bearer
+
+
+class TestListAnalyses:
+    """Tests for the GET /apps/analyses/ endpoint."""
+
+    def test_list_analyses_default_running(self, client, mock_token_verification, httpx_mock):
+        """Test listing analyses with default Running status filter."""
+        import json
+
+        username = "testuser"
+        analysis_1_id = str(uuid4())
+        analysis_2_id = str(uuid4())
+        app_1_id = str(uuid4())
+        app_2_id = str(uuid4())
+
+        # Mock the apps service response
+        filter_param = json.dumps([{"field": "status", "value": "Running"}])
+        httpx_mock.add_response(
+            url=f"http://apps/analyses?user={username}&filter={filter_param}",
+            json={
+                "analyses": [
+                    {
+                        "id": analysis_1_id,
+                        "app_id": app_1_id,
+                        "system_id": "de",
+                        "status": "Running",
+                        "name": "Test Analysis 1",
+                    },
+                    {
+                        "id": analysis_2_id,
+                        "app_id": app_2_id,
+                        "system_id": "de",
+                        "status": "Running",
+                        "name": "Test Analysis 2",
+                    },
+                ]
+            },
+            status_code=200,
+        )
+
+        response = client.get(
+            "/apps/analyses/",
+            headers={"Authorization": "Bearer fake-token"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "analyses" in data
+        assert len(data["analyses"]) == 2
+        assert data["analyses"][0]["analysis_id"] == analysis_1_id
+        assert data["analyses"][0]["app_id"] == app_1_id
+        assert data["analyses"][0]["system_id"] == "de"
+        assert data["analyses"][0]["status"] == "Running"
+        assert data["analyses"][1]["analysis_id"] == analysis_2_id
+
+    def test_list_analyses_with_completed_status(self, client, mock_token_verification, httpx_mock):
+        """Test listing analyses with Completed status filter."""
+        import json
+
+        username = "testuser"
+        analysis_id = str(uuid4())
+        app_id = str(uuid4())
+
+        filter_param = json.dumps([{"field": "status", "value": "Completed"}])
+        httpx_mock.add_response(
+            url=f"http://apps/analyses?user={username}&filter={filter_param}",
+            json={
+                "analyses": [
+                    {
+                        "id": analysis_id,
+                        "app_id": app_id,
+                        "system_id": "de",
+                        "status": "Completed",
+                        "name": "Test Analysis",
+                    },
+                ]
+            },
+            status_code=200,
+        )
+
+        response = client.get(
+            "/apps/analyses/?status=Completed",
+            headers={"Authorization": "Bearer fake-token"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "analyses" in data
+        assert len(data["analyses"]) == 1
+        assert data["analyses"][0]["status"] == "Completed"
+
+    def test_list_analyses_empty(self, client, mock_token_verification, httpx_mock):
+        """Test listing when no analyses match the filter."""
+        import json
+
+        username = "testuser"
+        filter_param = json.dumps([{"field": "status", "value": "Running"}])
+
+        httpx_mock.add_response(
+            url=f"http://apps/analyses?user={username}&filter={filter_param}",
+            json={"analyses": []},
+            status_code=200,
+        )
+
+        response = client.get(
+            "/apps/analyses/",
+            headers={"Authorization": "Bearer fake-token"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "analyses" in data
+        assert len(data["analyses"]) == 0
+
+    def test_list_analyses_unauthorized(self, client):
+        """Test listing analyses without authentication."""
+        response = client.get("/apps/analyses/")
+        assert response.status_code == 403  # FastAPI returns 403 for missing bearer

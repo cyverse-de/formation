@@ -101,6 +101,70 @@ class TestAppsClient:
         result = await client.get_analysis(analysis_id, username)
         assert result == expected_analysis
 
+    @pytest.mark.asyncio
+    async def test_list_analyses_with_status_filter(self, client, httpx_mock):
+        """Test successful listing of analyses with status filter."""
+        import json
+
+        username = "testuser"
+        expected_analyses = [
+            {
+                "id": str(uuid4()),
+                "app_id": str(uuid4()),
+                "system_id": "de",
+                "status": "Running",
+                "name": "Test Analysis 1",
+            },
+            {
+                "id": str(uuid4()),
+                "app_id": str(uuid4()),
+                "system_id": "de",
+                "status": "Running",
+                "name": "Test Analysis 2",
+            },
+        ]
+
+        filter_param = json.dumps([{"field": "status", "value": "Running"}])
+
+        httpx_mock.add_response(
+            url=f"http://apps.test/analyses?user={username}&filter={filter_param}",
+            json={"analyses": expected_analyses},
+            status_code=200,
+        )
+
+        result = await client.list_analyses(username, status="Running")
+        assert result["analyses"] == expected_analyses
+
+    @pytest.mark.asyncio
+    async def test_list_analyses_without_filter(self, client, httpx_mock):
+        """Test listing all analyses without status filter."""
+        username = "testuser"
+        expected_analyses = [
+            {
+                "id": str(uuid4()),
+                "app_id": str(uuid4()),
+                "system_id": "de",
+                "status": "Running",
+                "name": "Test Analysis 1",
+            },
+            {
+                "id": str(uuid4()),
+                "app_id": str(uuid4()),
+                "system_id": "de",
+                "status": "Completed",
+                "name": "Test Analysis 2",
+            },
+        ]
+
+        httpx_mock.add_response(
+            url=f"http://apps.test/analyses?user={username}",
+            json={"analyses": expected_analyses},
+            status_code=200,
+        )
+
+        result = await client.list_analyses(username)
+        assert result["analyses"] == expected_analyses
+
 
 class TestAppExposerClient:
     """Tests for AppExposerClient."""

@@ -145,6 +145,37 @@ class AppsClient:
             response.raise_for_status()
             return response.json()
 
+    async def list_analyses(
+        self, username: str, status: str | None = None
+    ) -> dict[str, Any]:
+        """
+        List analyses for the user, optionally filtered by status.
+
+        Args:
+            username: Username for request context
+            status: Optional status filter (e.g., "Running", "Completed", "Failed")
+                   If None, returns all analyses
+
+        Returns:
+            Dictionary with 'analyses' list containing analyses
+        """
+        import json
+
+        params: dict[str, Any] = {"user": username}
+
+        # Add status filter if provided
+        if status:
+            filter_param = json.dumps([{"field": "status", "value": status}])
+            params["filter"] = filter_param
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/analyses",
+                params=params,
+            )
+            response.raise_for_status()
+            return response.json()
+
 
 class AppExposerClient:
     """Client for the DE app-exposer service."""
