@@ -112,6 +112,28 @@ class DataStoreAPI:
             # If we can't check permissions, assume no access
             return False
 
+    def user_can_write(self, username: str, path: str) -> bool:
+        """Check if user has write permissions on the specified path."""
+        try:
+            permissions = self.get_permissions(path)
+            user_has_write_access = False
+
+            for perm in permissions:
+                if (
+                    hasattr(perm, "user_name")
+                    and perm.user_name == username
+                    and hasattr(perm, "access_name")
+                    and perm.access_name in ["write", "own"]
+                ):
+                    user_has_write_access = True
+                    break
+
+            return user_has_write_access
+
+        except Exception:
+            # If we can't check permissions, assume no access
+            return False
+
     def get_collection(self, path: str):
         """Get an iRODS collection by path."""
         return self.session.collections.get(path)
@@ -181,3 +203,65 @@ class DataStoreAPI:
             pass
 
         return headers
+
+    def create_directory(self, path: str) -> None:
+        """Create an iRODS collection (directory)."""
+        self.session.collections.create(path)
+
+    def upload_file(self, path: str, content: bytes) -> None:
+        """Upload file content to iRODS data object."""
+        # Create parent collection if it doesn't exist
+        import os
+
+        parent_path = os.path.dirname(path)
+        if not self.session.collections.exists(parent_path):
+            self.session.collections.create(parent_path)
+
+        # Create or overwrite the data object
+        data_obj = self.session.data_objects.create(path, force=True)
+
+        # Write content
+        with data_obj.open('w') as f:
+            f.write(content)
+
+    def set_file_metadata(
+        self, path: str, metadata: dict[str, tuple[str, str]], replace: bool = False
+    ) -> None:
+        """Set AVU metadata on an iRODS data object.
+
+        Args:
+            path: Path to the data object
+            metadata: Dict mapping attribute names to (value, units) tuples
+            replace: If True, clear existing metadata before adding new
+        """
+        data_obj = self.session.data_objects.get(path)
+
+        if replace:
+            # Clear existing metadata
+            for avu in data_obj.metadata.items():
+                data_obj.metadata.remove(avu)
+
+        # Add new metadata
+        for attribute, (value, units) in metadata.items():
+            data_obj.metadata.add(attribute, value, units if units else None)
+
+    def set_collection_metadata(
+        self, path: str, metadata: dict[str, tuple[str, str]], replace: bool = False
+    ) -> None:
+        """Set AVU metadata on an iRODS collection.
+
+        Args:
+            path: Path to the collection
+            metadata: Dict mapping attribute names to (value, units) tuples
+            replace: If True, clear existing metadata before adding new
+        """
+        collection = self.session.collections.get(path)
+
+        if replace:
+            # Clear existing metadata
+            for avu in collection.metadata.items():
+                collection.metadata.remove(avu)
+
+        # Add new metadata
+        for attribute, (value, units) in metadata.items():
+            collection.metadata.add(attribute, value, units if units else None)
