@@ -1,3 +1,5 @@
+from typing import Any
+
 from irods.access import iRODSAccess
 from irods.exception import UserDoesNotExist
 from irods.models import User
@@ -265,3 +267,113 @@ class DataStoreAPI:
         # Add new metadata
         for attribute, (value, units) in metadata.items():
             collection.metadata.add(attribute, value, units if units else None)
+
+    def delete_file(self, path: str, dry_run: bool = False) -> dict[str, Any]:
+        """Delete an iRODS data object.
+
+        Args:
+            path: Path to the data object
+            dry_run: If True, check if deletion would succeed without deleting
+
+        Returns:
+            Dictionary with deletion result
+        """
+        if dry_run:
+            # Check if file exists and return what would happen
+            exists = self.session.data_objects.exists(path)
+            return {
+                "path": path,
+                "type": "data_object",
+                "would_delete": exists,
+                "deleted": False,
+                "dry_run": True,
+            }
+
+        # Actually delete the file
+        self.session.data_objects.unlink(path)
+        return {
+            "path": path,
+            "type": "data_object",
+            "would_delete": True,
+            "deleted": True,
+            "dry_run": False,
+        }
+
+    def delete_directory(
+        self, path: str, recurse: bool = False, dry_run: bool = False
+    ) -> dict[str, Any]:
+        """Delete an iRODS collection.
+
+        Args:
+            path: Path to the collection
+            recurse: If True, delete non-empty directories
+            dry_run: If True, check if deletion would succeed without deleting
+
+        Returns:
+            Dictionary with deletion result and item count if recursive
+        """
+        collection = self.session.collections.get(path)
+
+        # Count items if recursive
+        item_count = 0
+        if recurse and collection:
+            if hasattr(collection, "subcollections"):
+                item_count += len(list(collection.subcollections))
+            if hasattr(collection, "data_objects"):
+                item_count += len(list(collection.data_objects))
+
+        if dry_run:
+            # Check if directory exists
+            exists = self.session.collections.exists(path)
+            result = {
+                "path": path,
+                "type": "collection",
+                "would_delete": exists,
+                "deleted": False,
+                "dry_run": True,
+            }
+            if recurse and item_count > 0:
+                result["item_count"] = item_count
+            return result
+
+        # Actually delete the directory
+        self.session.collections.remove(path, recurse=recurse, force=True)
+        result = {
+            "path": path,
+            "type": "collection",
+            "would_delete": True,
+            "deleted": True,
+            "dry_run": False,
+        }
+        if recurse and item_count > 0:
+            result["item_count"] = item_count
+        return result
+
+    def delete_path(
+        self, path: str, recurse: bool = False, dry_run: bool = False
+    ) -> dict[str, Any]:
+        """Delete a file or directory from iRODS.
+
+        Args:
+            path: iRODS path to delete
+            recurse: Allow deleting non-empty directories
+            dry_run: Preview deletion without executing
+
+        Returns:
+            Dictionary with deletion result
+        """
+        # Check if it's a file or directory
+        if self.session.data_objects.exists(path):
+            return self.delete_file(path, dry_run=dry_run)
+        elif self.session.collections.exists(path):
+            return self.delete_directory(path, recurse=recurse, dry_run=dry_run)
+        else:
+            # Path doesn't exist
+            return {
+                "path": path,
+                "type": "unknown",
+                "would_delete": False,
+                "deleted": False,
+                "dry_run": dry_run,
+                "error": "Path not found",
+            }

@@ -78,6 +78,16 @@ async def set_collection_metadata_async(
     )
 
 
+async def delete_path_async(
+    path: str, recurse: bool = False, dry_run: bool = False
+) -> dict[str, Any]:
+    """Async wrapper for deleting a path."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, datastore.delete_path, path, recurse, dry_run
+    )
+
+
 @router.get(
     "/data/{path:path}",
     summary="Browse iRODS directory contents or read file",
@@ -416,3 +426,120 @@ async def put_data(
             raise BadRequestError(
                 "Cannot determine operation: provide file content or type=directory parameter"
             )
+
+
+@router.delete(
+    "/data/{path:path}",
+    summary="Delete file or directory",
+    description=(
+        "Delete a file or directory from iRODS. "
+        "\n\n"
+        "**Dry-Run Mode:** Use dry_run=true to preview what would be deleted "
+        "without actually deleting. This is useful for verifying the operation "
+        "before executing it. The response will indicate what would be deleted "
+        "and whether the operation would succeed. "
+        "\n\n"
+        "**Recursive Deletion:** Use recurse=true to delete non-empty directories. "
+        "Default is false for safety. "
+        "\n\n"
+        "**Safety:** Deletions are permanent and cannot be undone. Always verify "
+        "paths before deletion. Consider using dry-run mode first. "
+        "\n\n"
+        "Requires authentication and write permissions."
+    ),
+    responses={
+        200: {
+            "description": "Successfully deleted or dry-run completed",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "dry_run_file": {
+                            "summary": "Dry-run file deletion",
+                            "value": {
+                                "path": "/cyverse/home/user/file.txt",
+                                "type": "data_object",
+                                "would_delete": True,
+                                "deleted": False,
+                                "dry_run": True,
+                            },
+                        },
+                        "actual_directory": {
+                            "summary": "Actual directory deletion with recurse",
+                            "value": {
+                                "path": "/cyverse/home/user/folder",
+                                "type": "collection",
+                                "would_delete": True,
+                                "deleted": True,
+                                "dry_run": False,
+                                "item_count": 15,
+                            },
+                        },
+                    }
+                }
+            },
+        },
+        400: {
+            "description": "Bad request - non-empty directory without recurse",
+            "content": {
+                "application/json": {"example": {"detail": "Directory not empty"}}
+            },
+        },
+        401: {
+            "description": "Unauthorized - invalid or missing access token",
+            "content": {
+                "application/json": {"example": {"detail": "Not authenticated"}}
+            },
+        },
+        403: {
+            "description": "Insufficient permissions",
+            "content": {"application/json": {"example": {"detail": "Access denied"}}},
+        },
+        404: {
+            "description": "Path not found",
+            "content": {
+                "application/json": {"example": {"detail": "Path not found"}}
+            },
+        },
+    },
+)
+async def delete_data(
+    path: str,
+    current_user: Any = Depends(get_current_user),
+    recurse: bool = False,
+    dry_run: bool = False,
+):
+    """Delete file or directory from iRODS."""
+    # Ensure path starts with / for iRODS
+    irods_path = f"/{path}" if not path.startswith("/") else path
+
+    # Extract username from JWT token
+    username = extract_user_from_jwt(current_user)
+
+    # Check if path exists
+    if not datastore.path_exists(irods_path):
+        raise ResourceNotFoundError("Path", irods_path)
+
+    # Check write permissions
+    if not datastore.user_can_write(username, irods_path):
+        raise PermissionDeniedError()
+
+    # For non-empty directories without recurse, fail early (unless dry-run)
+    if datastore.collection_exists(irods_path) and not recurse and not dry_run:
+        collection = datastore.get_collection(irods_path)
+        has_items = False
+        if hasattr(collection, "subcollections") and list(collection.subcollections):
+            has_items = True
+        if hasattr(collection, "data_objects") and list(collection.data_objects):
+            has_items = True
+
+        if has_items:
+            from exceptions import BadRequestError
+
+            raise BadRequestError(
+                "Directory not empty. Use recurse=true to delete non-empty directories."
+            )
+
+    # Perform deletion (or dry-run)
+    result = await delete_path_async(irods_path, recurse=recurse, dry_run=dry_run)
+
+    return JSONResponse(content=result)
