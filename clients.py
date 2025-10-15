@@ -24,9 +24,7 @@ class AppsClient:
         self.base_url = self.base_url.rstrip("/")
         self.timeout = timeout
 
-    async def get_app(
-        self, app_id: UUID, username: str, system_id: str = "de"
-    ) -> dict[str, Any]:
+    async def get_app(self, app_id: UUID, username: str, system_id: str = "de") -> dict[str, Any]:
         """
         Get app details by ID.
 
@@ -145,9 +143,7 @@ class AppsClient:
             response.raise_for_status()
             return response.json()
 
-    async def list_analyses(
-        self, username: str, status: str | None = None
-    ) -> dict[str, Any]:
+    async def list_analyses(self, username: str, status: str | None = None) -> dict[str, Any]:
         """
         List analyses for the user, optionally filtered by status.
 
@@ -276,9 +272,7 @@ class AppExposerClient:
             Termination status
         """
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/vice/admin/analyses/{analysis_id}/exit"
-            )
+            response = await client.post(f"{self.base_url}/vice/admin/analyses/{analysis_id}/exit")
             response.raise_for_status()
             # App-exposer returns 200 with no body for this endpoint
             return {"status": "terminated", "outputs_saved": False}
