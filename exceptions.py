@@ -3,7 +3,7 @@
 from typing import Any
 
 
-class FormationException(Exception):
+class FormationError(Exception):
     """Base exception for Formation errors."""
 
     def __init__(
@@ -18,7 +18,7 @@ class FormationException(Exception):
         super().__init__(self.message)
 
 
-class ServiceUnavailableError(FormationException):
+class ServiceUnavailableError(FormationError):
     """Service is not available or not configured."""
 
     def __init__(self, service_name: str):
@@ -27,7 +27,7 @@ class ServiceUnavailableError(FormationException):
         )
 
 
-class ExternalServiceError(FormationException):
+class ExternalServiceError(FormationError):
     """External service returned an error."""
 
     def __init__(self, service_name: str, status_code: int, detail: str):
@@ -38,7 +38,7 @@ class ExternalServiceError(FormationException):
         )
 
 
-class ResourceNotFoundError(FormationException):
+class ResourceNotFoundError(FormationError):
     """Requested resource was not found."""
 
     def __init__(self, resource_type: str, resource_id: str | None = None):
@@ -48,7 +48,7 @@ class ResourceNotFoundError(FormationException):
         super().__init__(message=message, status_code=404)
 
 
-class ValidationError(FormationException):
+class ValidationError(FormationError):
     """Input validation failed."""
 
     def __init__(self, message: str, field: str | None = None):
@@ -56,7 +56,7 @@ class ValidationError(FormationException):
         super().__init__(message=message, status_code=400, details=details)
 
 
-class PermissionDeniedError(FormationException):
+class PermissionDeniedError(FormationError):
     """User does not have permission to access resource."""
 
     def __init__(self, message: str = "Access denied"):

@@ -14,7 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import auth
 import ds
 from config import config
-from exceptions import FormationException
+from exceptions import FormationError
 from routes import apps, datastore
 from routes import auth as auth_routes
 
@@ -25,11 +25,15 @@ tags_metadata = [
     },
     {
         "name": "Apps",
-        "description": "Discover, launch, and manage Discovery Environment applications and analyses",
+        "description": (
+            "Discover, launch, and manage Discovery Environment applications and analyses"
+        ),
     },
     {
         "name": "Data Store",
-        "description": "Browse and access files in iRODS distributed file system with metadata support",
+        "description": (
+            "Browse and access files in iRODS distributed file system with metadata support"
+        ),
     },
 ]
 
@@ -63,9 +67,9 @@ app.include_router(auth_routes.router)
 app.include_router(datastore.router)
 
 
-@app.exception_handler(FormationException)
+@app.exception_handler(FormationError)
 async def formation_exception_handler(
-    request: Request, exc: FormationException
+    request: Request, exc: FormationError
 ) -> JSONResponse:
     """Handle custom Formation exceptions."""
     del request  # Unused but required by FastAPI signature
@@ -136,7 +140,10 @@ basic_auth = HTTPBasic()
     "/login",
     tags=["Authentication"],
     summary="Authenticate user and obtain access token",
-    description="Authenticates a user with username and password via HTTP Basic Auth and returns an access token from Keycloak",
+    description=(
+        "Authenticates a user with username and password via HTTP Basic Auth and returns "
+        "an access token from Keycloak"
+    ),
     response_description="Access token and related authentication information",
     responses={
         200: {
