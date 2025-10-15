@@ -91,11 +91,26 @@ async def delete_path_async(
 @router.get(
     "/data/{path:path}",
     summary="Browse iRODS directory contents or read file",
-    description="Lists the contents of a directory in iRODS or reads the contents of a file. The path parameter should be the full iRODS path. For files, returns raw file content as plain text with optional offset and limit query parameters for paging. For directories, returns JSON with file/directory listing. When include_metadata=true, both files and directories include iRODS AVU metadata as response headers (X-Datastore-{attribute}). The avu-delimiter parameter controls the separator between value and unit in headers (default: ','). Requires authentication.",
-    response_description="JSON list of files and directories if path is a directory, or raw file contents as plain text if path is a file. When include_metadata=true, AVU metadata is included as X-Datastore-{attribute} response headers.",
+    description=(
+        "Lists the contents of a directory in iRODS or reads the contents of a file. "
+        "The path parameter should be the full iRODS path. For files, returns raw file "
+        "content as plain text with optional offset and limit query parameters for paging. "
+        "For directories, returns JSON with file/directory listing. When include_metadata=true, "
+        "both files and directories include iRODS AVU metadata as response headers "
+        "(X-Datastore-{attribute}). The avu-delimiter parameter controls the separator between "
+        "value and unit in headers (default: ','). Requires authentication."
+    ),
+    response_description=(
+        "JSON list of files and directories if path is a directory, or raw file contents "
+        "as plain text if path is a file. When include_metadata=true, AVU metadata is "
+        "included as X-Datastore-{attribute} response headers."
+    ),
     responses={
         200: {
-            "description": "Directory contents or file contents retrieved successfully, with optional AVU metadata in response headers if include_metadata=true",
+            "description": (
+                "Directory contents or file contents retrieved successfully, "
+                "with optional AVU metadata in response headers if include_metadata=true"
+            ),
             "content": {
                 "application/json": {
                     "example": {
@@ -106,11 +121,19 @@ async def delete_path_async(
                             {"name": "subdirectory", "type": "collection"},
                         ],
                     },
-                    "description": "JSON response when path is a directory. AVU metadata included as X-Datastore-{attribute} headers when include_metadata=true.",
+                    "description": (
+                        "JSON response when path is a directory. "
+                        "AVU metadata included as X-Datastore-{attribute} headers "
+                        "when include_metadata=true."
+                    ),
                 },
                 "text/plain": {
                     "example": "This is the raw file content...",
-                    "description": "Raw file content when path is a file. AVU metadata included as X-Datastore-{attribute} headers when include_metadata=true.",
+                    "description": (
+                        "Raw file content when path is a file. "
+                        "AVU metadata included as X-Datastore-{attribute} headers "
+                        "when include_metadata=true."
+                    ),
                 },
             },
         },
@@ -237,9 +260,12 @@ async def browse_directory(
         "The path parameter should be the full iRODS path. "
         "\n\n"
         "**Metadata:** Metadata is provided via X-Datastore-{attribute} request headers. "
-        "The avu-delimiter parameter controls how to parse value and units from header values (default: ','). "
-        "Note: Custom headers cannot be set through the Swagger UI. Use curl or other HTTP clients for metadata. "
-        "Example: `curl -X PUT -H 'X-Datastore-Author: username' -H 'X-Datastore-Project: myproject' ...`"
+        "The avu-delimiter parameter controls how to parse value and units from header "
+        "values (default: ','). "
+        "Note: Custom headers cannot be set through the Swagger UI. Use curl or other "
+        "HTTP clients for metadata. "
+        "Example: `curl -X PUT -H 'X-Datastore-Author: username' -H "
+        "'X-Datastore-Project: myproject' ...`"
         "\n\n"
         "**Operations:**\n"
         "- Create file: Send request body with file content\n"
