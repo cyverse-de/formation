@@ -56,6 +56,13 @@ class ValidationError(FormationError):
         super().__init__(message=message, status_code=400, details=details)
 
 
+class BadRequestError(FormationError):
+    """Bad request - invalid operation or parameters."""
+
+    def __init__(self, message: str):
+        super().__init__(message=message, status_code=400)
+
+
 class PermissionDeniedError(FormationError):
     """User does not have permission to access resource."""
 

@@ -11,7 +11,7 @@ from fastapi.responses import Response as FastAPIResponse
 import ds
 from config import config
 from dependencies import extract_user_from_jwt, get_current_user
-from exceptions import PermissionDeniedError, ResourceNotFoundError
+from exceptions import BadRequestError, PermissionDeniedError, ResourceNotFoundError
 
 router = APIRouter(prefix="", tags=["Data Store"])
 
@@ -365,8 +365,6 @@ async def put_data(
         if has_content:
             # Update file content
             if is_collection:
-                from exceptions import BadRequestError
-
                 raise BadRequestError("Cannot upload file - path is a directory")
 
             await upload_file_async(irods_path, body_content)
@@ -447,8 +445,6 @@ async def put_data(
             )
         else:
             # Ambiguous - no content and no type specified
-            from exceptions import BadRequestError
-
             raise BadRequestError(
                 "Cannot determine operation: provide file content or type=directory parameter"
             )
@@ -552,18 +548,17 @@ async def delete_data(
     # For non-empty directories without recurse, fail early (unless dry-run)
     if datastore.collection_exists(irods_path) and not recurse and not dry_run:
         collection = datastore.get_collection(irods_path)
-        has_items = False
-        if hasattr(collection, "subcollections") and list(collection.subcollections):
-            has_items = True
-        if hasattr(collection, "data_objects") and list(collection.data_objects):
-            has_items = True
+        if collection is not None:
+            has_items = False
+            if hasattr(collection, "subcollections") and list(collection.subcollections):
+                has_items = True
+            if hasattr(collection, "data_objects") and list(collection.data_objects):
+                has_items = True
 
-        if has_items:
-            from exceptions import BadRequestError
-
-            raise BadRequestError(
-                "Directory not empty. Use recurse=true to delete non-empty directories."
-            )
+            if has_items:
+                raise BadRequestError(
+                    "Directory not empty. Use recurse=true to delete non-empty directories."
+                )
 
     # Perform deletion (or dry-run)
     result = await delete_path_async(irods_path, recurse=recurse, dry_run=dry_run)
