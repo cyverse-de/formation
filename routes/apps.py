@@ -484,6 +484,12 @@ async def list_apps(
     The returned `system_id` field should be used as the `system_id` path parameter when
     interacting with the app through other endpoints (e.g., `/apps/{system_id}/{app_id}/parameters`,
     `/app/launch/{system_id}/{app_id}`, etc.).
+
+    Each app includes an `overall_job_type` field indicating the type of app:
+    - "Interactive": VICE (Visual Interactive Computing Environment) apps
+    - "DE": Discovery Environment batch apps
+    - "OSG": Open Science Grid apps
+    - "Tapis": High-Performance Computing apps
     """
     # Validate pagination parameters
     if limit < 1 or limit > 1000:
@@ -601,6 +607,7 @@ async def list_apps(
                 "integration_date": app.get("integration_date"),
                 "edited_date": app.get("edited_date"),
                 "system_id": app.get("system_id"),
+                "overall_job_type": app.get("overall_job_type"),
             }
         )
 
@@ -696,7 +703,11 @@ async def get_app_parameters(
     app_data = await apps_client.get_app(app_uuid, username, system_id=system_id)
 
     # Extract and return the groups section which contains parameter definitions
-    return {"groups": app_data.get("groups", [])}
+    # Include overall_job_type to help clients determine if it's an interactive app
+    return {
+        "groups": app_data.get("groups", []),
+        "overall_job_type": app_data.get("overall_job_type"),
+    }
 
 
 @router.post("/app/launch/{system_id}/{app_id}")

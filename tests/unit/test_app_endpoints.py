@@ -592,6 +592,7 @@ class TestGetAppParameters:
                 "id": app_id,
                 "name": "Test App",
                 "groups": expected_groups,
+                "overall_job_type": "Interactive",
             }
 
             response = client.get(
@@ -603,6 +604,8 @@ class TestGetAppParameters:
             data = response.json()
             assert "groups" in data
             assert data["groups"] == expected_groups
+            assert "overall_job_type" in data
+            assert data["overall_job_type"] == "Interactive"
 
     def test_get_parameters_empty(self, client, mock_token_verification):
         """Test parameters retrieval when app has no groups section."""
@@ -621,7 +624,7 @@ class TestGetAppParameters:
 
             assert response.status_code == 200
             data = response.json()
-            assert data == {"groups": []}
+            assert data == {"groups": [], "overall_job_type": None}
 
     def test_get_parameters_not_found(self, client, mock_token_verification):
         """Test parameters retrieval for non-existent app."""
