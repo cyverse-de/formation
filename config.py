@@ -31,10 +31,16 @@ class Config:
 
         # Keycloak configuration
         keycloak_config = json_config.get("keycloak", {})
-        self.keycloak_server_url = self._get_config("KEYCLOAK_SERVER_URL", keycloak_config.get("server_url"))
+        self.keycloak_server_url = self._get_config(
+            "KEYCLOAK_SERVER_URL", keycloak_config.get("server_url")
+        )
         self.keycloak_realm = self._get_config("KEYCLOAK_REALM", keycloak_config.get("realm"))
-        self.keycloak_client_id = self._get_config("KEYCLOAK_CLIENT_ID", keycloak_config.get("client_id"))
-        self.keycloak_client_secret = self._get_config("KEYCLOAK_CLIENT_SECRET", keycloak_config.get("client_secret"))
+        self.keycloak_client_id = self._get_config(
+            "KEYCLOAK_CLIENT_ID", keycloak_config.get("client_id")
+        )
+        self.keycloak_client_secret = self._get_config(
+            "KEYCLOAK_CLIENT_SECRET", keycloak_config.get("client_secret")
+        )
 
         # Handle boolean ssl_verify
         ssl_verify_env = os.environ.get("KEYCLOAK_SSL_VERIFY")
@@ -46,25 +52,40 @@ class Config:
 
         # Service URLs
         services_config = json_config.get("services", {})
-        self.apps_base_url = os.environ.get("APPS_BASE_URL") or services_config.get("apps_base_url", "http://apps")
-        self.app_exposer_base_url = os.environ.get("APP_EXPOSER_BASE_URL") or services_config.get("app_exposer_base_url", "http://app-exposer")
-        self.permissions_base_url = os.environ.get("PERMISSIONS_BASE_URL") or services_config.get("permissions_base_url", "http://permissions")
+        self.apps_base_url = os.environ.get("APPS_BASE_URL") or services_config.get(
+            "apps_base_url", "http://apps"
+        )
+        self.app_exposer_base_url = os.environ.get(
+            "APP_EXPOSER_BASE_URL"
+        ) or services_config.get("app_exposer_base_url", "http://app-exposer")
+        self.permissions_base_url = os.environ.get(
+            "PERMISSIONS_BASE_URL"
+        ) or services_config.get("permissions_base_url", "http://permissions")
 
         # Application settings
         app_config = json_config.get("application", {})
-        self.user_suffix = os.environ.get("USER_SUFFIX") or app_config.get("user_suffix", "@iplantcollaborative.org")
-        self.vice_domain = os.environ.get("VICE_DOMAIN") or app_config.get("vice_domain", ".cyverse.run")
-        self.path_prefix = os.environ.get("PATH_PREFIX") or app_config.get("path_prefix", "/formation")
+        self.user_suffix = os.environ.get("USER_SUFFIX") or app_config.get(
+            "user_suffix", "@iplantcollaborative.org"
+        )
+        self.vice_domain = os.environ.get("VICE_DOMAIN") or app_config.get(
+            "vice_domain", ".cyverse.run"
+        )
+        self.path_prefix = os.environ.get("PATH_PREFIX") or app_config.get(
+            "path_prefix", "/formation"
+        )
 
         # VICE URL checking settings
         self.vice_url_check_timeout = float(
-            os.environ.get("VICE_URL_CHECK_TIMEOUT") or app_config.get("vice_url_check_timeout", 5.0)
+            os.environ.get("VICE_URL_CHECK_TIMEOUT")
+            or app_config.get("vice_url_check_timeout", 5.0)
         )
         self.vice_url_check_retries = int(
-            os.environ.get("VICE_URL_CHECK_RETRIES") or app_config.get("vice_url_check_retries", 3)
+            os.environ.get("VICE_URL_CHECK_RETRIES")
+            or app_config.get("vice_url_check_retries", 3)
         )
         self.vice_url_check_cache_ttl = float(
-            os.environ.get("VICE_URL_CHECK_CACHE_TTL") or app_config.get("vice_url_check_cache_ttl", 5.0)
+            os.environ.get("VICE_URL_CHECK_CACHE_TTL")
+            or app_config.get("vice_url_check_cache_ttl", 5.0)
         )
 
         # Use irods zone as the output zone
@@ -120,7 +141,10 @@ class Config:
             return str(json_value)
 
         # Neither is set - this is an error for required values
-        print(f"Configuration value {env_var} is not set (not in environment or JSON config).", file=sys.stderr)
+        print(
+            f"Configuration value {env_var} is not set (not in environment or JSON config).",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
