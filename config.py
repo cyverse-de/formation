@@ -34,6 +34,9 @@ class Config:
         self.keycloak_server_url = self._get_config(
             "KEYCLOAK_SERVER_URL", keycloak_config.get("server_url")
         )
+        # Ensure keycloak_server_url has a trailing slash
+        if not self.keycloak_server_url.endswith("/"):
+            self.keycloak_server_url += "/"
         self.keycloak_realm = self._get_config("KEYCLOAK_REALM", keycloak_config.get("realm"))
         self.keycloak_client_id = self._get_config(
             "KEYCLOAK_CLIENT_ID", keycloak_config.get("client_id")
