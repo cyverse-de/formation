@@ -482,7 +482,7 @@ async def list_apps(
     Returns a list of apps that the user has access to, optionally filtered by job type.
 
     The returned `system_id` field should be used as the `system_id` path parameter when
-    interacting with the app through other endpoints (e.g., `/apps/{system_id}/{app_id}/config`,
+    interacting with the app through other endpoints (e.g., `/apps/{system_id}/{app_id}/parameters`,
     `/app/launch/{system_id}/{app_id}`, etc.).
     """
     # Validate pagination parameters
@@ -656,21 +656,30 @@ async def list_analyses(
     return {"analyses": formatted_analyses}
 
 
-@router.get("/apps/{system_id}/{app_id}/config")
-async def get_app_config(
+@router.get("/apps/{system_id}/{app_id}/parameters")
+async def get_app_parameters(
     system_id: str,
     app_id: str,
     user: Any = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Get configuration for a specific app.
+    """Get parameter definitions for a specific app.
 
-    Returns the configuration needed to launch the app, including
-    parameter definitions and default values.
+    Returns the parameter groups and definitions needed to launch the app,
+    including parameter types, labels, default values, and validation rules.
 
     Args:
         system_id: System identifier from the app listing (use the `system_id` field
                    returned by the `/apps` endpoint)
         app_id: App UUID
+
+    Returns:
+        Dictionary containing:
+        - groups: List of parameter groups, each with:
+            - id: Group identifier
+            - name: Internal group name
+            - label: Display label for the group
+            - parameters: List of parameter definitions
+            - step_number: Step number for multi-step apps
     """
     if not apps_client:
         raise ServiceUnavailableError("Apps")
@@ -686,9 +695,8 @@ async def get_app_config(
     # Get full app definition from apps service
     app_data = await apps_client.get_app(app_uuid, username, system_id=system_id)
 
-    # Extract and return just the config section
-    # The config section contains parameter definitions needed for launching
-    return app_data.get("config", {})
+    # Extract and return the groups section which contains parameter definitions
+    return {"groups": app_data.get("groups", [])}
 
 
 @router.post("/app/launch/{system_id}/{app_id}")

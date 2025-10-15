@@ -71,8 +71,12 @@ class TestLaunchApp:
         }
 
         with patch("clients.AppsClient.submit_analysis", new_callable=AsyncMock) as mock_submit:
-            with patch("clients.AppExposerClient.get_external_id", new_callable=AsyncMock) as mock_external_id:
-                with patch("clients.AppExposerClient.get_async_data", new_callable=AsyncMock) as mock_async_data:
+            with patch(
+                "clients.AppExposerClient.get_external_id", new_callable=AsyncMock
+            ) as mock_external_id:
+                with patch(
+                    "clients.AppExposerClient.get_async_data", new_callable=AsyncMock
+                ) as mock_async_data:
                     mock_submit.return_value = {
                         "id": analysis_id,
                         "name": "Test Analysis",
@@ -285,7 +289,6 @@ class TestLaunchApp:
                 )
 
                 assert response.status_code == 200
-                data = response.json()
 
                 # Verify all defaults were applied
                 mock_submit.assert_called_once()
@@ -374,9 +377,15 @@ class TestGetAppStatus:
         external_id = str(uuid4())
 
         with patch("clients.AppsClient.get_analysis", new_callable=AsyncMock) as mock_get:
-            with patch("clients.AppExposerClient.get_external_id", new_callable=AsyncMock) as mock_external:
-                with patch("clients.AppExposerClient.get_async_data", new_callable=AsyncMock) as mock_async:
-                    with patch("routes.apps.check_vice_url_ready", new_callable=AsyncMock) as mock_ready:
+            with patch(
+                "clients.AppExposerClient.get_external_id", new_callable=AsyncMock
+            ) as mock_external:
+                with patch(
+                    "clients.AppExposerClient.get_async_data", new_callable=AsyncMock
+                ) as mock_async:
+                    with patch(
+                        "routes.apps.check_vice_url_ready", new_callable=AsyncMock
+                    ) as mock_ready:
                         mock_get.return_value = {
                             "id": analysis_id,
                             "status": "Running",
@@ -387,7 +396,10 @@ class TestGetAppStatus:
                             "subdomain": "test-subdomain",
                             "ipAddr": "10.0.0.1",
                         }
-                        mock_ready.return_value = (True, {"status_code": 200, "response_time_ms": 100})
+                        mock_ready.return_value = (
+                            True,
+                            {"status_code": 200, "response_time_ms": 100},
+                        )
 
                         response = client.get(
                             f"/apps/analyses/{analysis_id}/status",
@@ -406,7 +418,9 @@ class TestGetAppStatus:
         analysis_id = str(uuid4())
 
         with patch("clients.AppsClient.get_analysis", new_callable=AsyncMock) as mock_get:
-            with patch("clients.AppExposerClient.check_url_ready", new_callable=AsyncMock) as mock_ready:
+            with patch(
+                "clients.AppExposerClient.check_url_ready", new_callable=AsyncMock
+            ) as mock_ready:
                 mock_get.return_value = {
                     "id": analysis_id,
                     "status": "Launching",
@@ -462,7 +476,9 @@ class TestControlApp:
         """Test extending time limit."""
         analysis_id = str(uuid4())
 
-        with patch("clients.AppExposerClient.extend_time_limit", new_callable=AsyncMock) as mock_extend:
+        with patch(
+            "clients.AppExposerClient.extend_time_limit", new_callable=AsyncMock
+        ) as mock_extend:
             mock_extend.return_value = {"time_limit": "2025-10-03T10:00:00Z"}
 
             response = client.post(
@@ -497,7 +513,9 @@ class TestControlApp:
         """Test exit without save operation."""
         analysis_id = str(uuid4())
 
-        with patch("clients.AppExposerClient.exit_without_save", new_callable=AsyncMock) as mock_exit:
+        with patch(
+            "clients.AppExposerClient.exit_without_save", new_callable=AsyncMock
+        ) as mock_exit:
             mock_exit.return_value = {"status": "terminated", "outputs_saved": False}
 
             response = client.post(
@@ -526,7 +544,9 @@ class TestControlApp:
         analysis_id = str(uuid4())
         from httpx import HTTPStatusError, Request, Response
 
-        with patch("clients.AppExposerClient.extend_time_limit", new_callable=AsyncMock) as mock_extend:
+        with patch(
+            "clients.AppExposerClient.extend_time_limit", new_callable=AsyncMock
+        ) as mock_extend:
             mock_request = MagicMock(spec=Request)
             mock_response = MagicMock(spec=Response)
             mock_response.status_code = 404
@@ -544,41 +564,48 @@ class TestControlApp:
             assert response.status_code == 502
 
 
-class TestGetAppConfig:
-    """Tests for GET /apps/{app_id}/config endpoint."""
+class TestGetAppParameters:
+    """Tests for GET /apps/{system_id}/{app_id}/parameters endpoint."""
 
-    def test_get_config_success(self, client, mock_token_verification):
-        """Test successful config retrieval."""
+    def test_get_parameters_success(self, client, mock_token_verification):
+        """Test successful parameters retrieval."""
         app_id = str(uuid4())
-        expected_config = {
-            "parameters": [
-                {
-                    "id": "param1",
-                    "name": "Input File",
-                    "type": "FileInput",
-                    "required": True,
-                }
-            ]
-        }
+        expected_groups = [
+            {
+                "id": "group1",
+                "name": "",
+                "label": "Input Parameters",
+                "parameters": [
+                    {
+                        "id": "param1",
+                        "name": "Input File",
+                        "type": "FileInput",
+                        "required": True,
+                    }
+                ],
+                "step_number": 0,
+            }
+        ]
 
         with patch("clients.AppsClient.get_app", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = {
                 "id": app_id,
                 "name": "Test App",
-                "config": expected_config,
+                "groups": expected_groups,
             }
 
             response = client.get(
-                f"/apps/de/{app_id}/config",
+                f"/apps/de/{app_id}/parameters",
                 headers={"Authorization": "Bearer fake-token"},
             )
 
             assert response.status_code == 200
             data = response.json()
-            assert data == expected_config
+            assert "groups" in data
+            assert data["groups"] == expected_groups
 
-    def test_get_config_empty(self, client, mock_token_verification):
-        """Test config retrieval when app has no config section."""
+    def test_get_parameters_empty(self, client, mock_token_verification):
+        """Test parameters retrieval when app has no groups section."""
         app_id = str(uuid4())
 
         with patch("clients.AppsClient.get_app", new_callable=AsyncMock) as mock_get:
@@ -588,16 +615,16 @@ class TestGetAppConfig:
             }
 
             response = client.get(
-                f"/apps/de/{app_id}/config",
+                f"/apps/de/{app_id}/parameters",
                 headers={"Authorization": "Bearer fake-token"},
             )
 
             assert response.status_code == 200
             data = response.json()
-            assert data == {}
+            assert data == {"groups": []}
 
-    def test_get_config_not_found(self, client, mock_token_verification):
-        """Test config retrieval for non-existent app."""
+    def test_get_parameters_not_found(self, client, mock_token_verification):
+        """Test parameters retrieval for non-existent app."""
         app_id = str(uuid4())
         from httpx import HTTPStatusError, Request, Response
 
@@ -611,17 +638,17 @@ class TestGetAppConfig:
             )
 
             response = client.get(
-                f"/apps/de/{app_id}/config",
+                f"/apps/de/{app_id}/parameters",
                 headers={"Authorization": "Bearer fake-token"},
             )
 
             # External service errors now return 502 Bad Gateway
             assert response.status_code == 502
 
-    def test_get_config_invalid_uuid(self, client, mock_token_verification):
-        """Test config retrieval with invalid UUID format."""
+    def test_get_parameters_invalid_uuid(self, client, mock_token_verification):
+        """Test parameters retrieval with invalid UUID format."""
         response = client.get(
-            "/apps/de/not-a-uuid/config",
+            "/apps/de/not-a-uuid/parameters",
             headers={"Authorization": "Bearer fake-token"},
         )
 
@@ -629,10 +656,10 @@ class TestGetAppConfig:
         data = response.json()
         assert "Invalid app ID format" in data["detail"]
 
-    def test_get_config_unauthorized(self, client):
-        """Test config retrieval without authentication."""
+    def test_get_parameters_unauthorized(self, client):
+        """Test parameters retrieval without authentication."""
         app_id = str(uuid4())
-        response = client.get(f"/apps/de/{app_id}/config")
+        response = client.get(f"/apps/de/{app_id}/parameters")
         assert response.status_code == 403  # FastAPI returns 403 for missing bearer
 
 
