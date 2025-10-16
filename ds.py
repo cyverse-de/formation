@@ -92,49 +92,45 @@ class DataStoreAPI:
     def home_directory(self, username: str) -> str:
         return iRODSPath(f"/{self.zone}/home/{username}")
 
-    def user_can_read(self, username: str, path: str) -> bool:
-        """Check if user has read permissions on the specified path."""
+    def _user_has_permission(
+        self, username: str, path: str, required_permissions: list[str]
+    ) -> bool:
+        """Check if user has any of the specified permissions on the path.
+
+        Args:
+            username: Username to check permissions for
+            path: Path to check permissions on
+            required_permissions: List of permission names that satisfy the check
+                                 (e.g., ["read", "write", "own"])
+
+        Returns:
+            True if user has any of the required permissions, False otherwise
+        """
         try:
             permissions = self.get_permissions(path)
-            user_has_read_access = False
 
             for perm in permissions:
                 if (
                     hasattr(perm, "user_name")
                     and perm.user_name == username
                     and hasattr(perm, "access_name")
-                    and perm.access_name in ["read", "write", "own"]
+                    and perm.access_name in required_permissions
                 ):
-                    user_has_read_access = True
-                    break
+                    return True
 
-            return user_has_read_access
+            return False
 
         except Exception:
             # If we can't check permissions, assume no access
             return False
+
+    def user_can_read(self, username: str, path: str) -> bool:
+        """Check if user has read permissions on the specified path."""
+        return self._user_has_permission(username, path, ["read", "write", "own"])
 
     def user_can_write(self, username: str, path: str) -> bool:
         """Check if user has write permissions on the specified path."""
-        try:
-            permissions = self.get_permissions(path)
-            user_has_write_access = False
-
-            for perm in permissions:
-                if (
-                    hasattr(perm, "user_name")
-                    and perm.user_name == username
-                    and hasattr(perm, "access_name")
-                    and perm.access_name in ["write", "own"]
-                ):
-                    user_has_write_access = True
-                    break
-
-            return user_has_write_access
-
-        except Exception:
-            # If we can't check permissions, assume no access
-            return False
+        return self._user_has_permission(username, path, ["write", "own"])
 
     def get_collection(self, path: str):
         """Get an iRODS collection by path."""
@@ -163,48 +159,48 @@ class DataStoreAPI:
             "size": file_size
         }
 
+    def _format_metadata_as_headers(self, metadata_items, delimiter: str = ",") -> dict[str, str]:
+        """Format AVU metadata items as HTTP response headers.
+
+        Args:
+            metadata_items: Iterable of AVU metadata items with name, value, and units attributes
+            delimiter: Delimiter to use between value and units (default: ',')
+
+        Returns:
+            Dictionary of header names to header values
+        """
+        headers = {}
+        for avu in metadata_items:
+            header_key = f"X-Datastore-{avu.name}"
+            # Combine value and unit (if present) with custom delimiter
+            if avu.units:
+                header_value = f"{avu.value}{delimiter}{avu.units}"
+            else:
+                header_value = avu.value
+            headers[header_key] = header_value
+        return headers
+
     def get_file_metadata(self, path: str, delimiter: str = ",") -> dict[str, str]:
         """Get AVU metadata for an iRODS data object formatted as response headers."""
-        data_obj = self.session.data_objects.get(path)
-        headers = {}
-
         try:
+            data_obj = self.session.data_objects.get(path)
             metadata = data_obj.metadata.items()
-            for avu in metadata:
-                header_key = f"X-Datastore-{avu.name}"
-                # Combine value and unit (if present) with custom delimiter
-                if avu.units:
-                    header_value = f"{avu.value}{delimiter}{avu.units}"
-                else:
-                    header_value = avu.value
-                headers[header_key] = header_value
+            return self._format_metadata_as_headers(metadata, delimiter)
         except Exception:
             # If metadata retrieval fails, return empty headers
-            pass
-
-        return headers
+            return {}
 
     def get_collection_metadata(self, path: str, delimiter: str = ",") -> dict[str, str]:
         """Get AVU metadata for an iRODS collection formatted as response headers."""
-        headers = {}
-
         try:
             collection = self.session.collections.get(path)
             if collection is not None:
                 metadata = collection.metadata.items()
-                for avu in metadata:
-                    header_key = f"X-Datastore-{avu.name}"
-                    # Combine value and unit (if present) with custom delimiter
-                    if avu.units:
-                        header_value = f"{avu.value}{delimiter}{avu.units}"
-                    else:
-                        header_value = avu.value
-                    headers[header_key] = header_value
+                return self._format_metadata_as_headers(metadata, delimiter)
+            return {}
         except Exception:
             # If metadata retrieval fails, return empty headers
-            pass
-
-        return headers
+            return {}
 
     def create_directory(self, path: str) -> None:
         """Create an iRODS collection (directory)."""
@@ -226,6 +222,25 @@ class DataStoreAPI:
         with data_obj.open('w') as f:
             f.write(content)
 
+    def _set_metadata_on_object(
+        self, irods_obj, metadata: dict[str, tuple[str, str]], replace: bool = False
+    ) -> None:
+        """Set AVU metadata on an iRODS object (data object or collection).
+
+        Args:
+            irods_obj: iRODS data object or collection
+            metadata: Dict mapping attribute names to (value, units) tuples
+            replace: If True, clear existing metadata before adding new
+        """
+        if replace:
+            # Clear existing metadata
+            for avu in irods_obj.metadata.items():
+                irods_obj.metadata.remove(avu)
+
+        # Add new metadata
+        for attribute, (value, units) in metadata.items():
+            irods_obj.metadata.add(attribute, value, units if units else None)
+
     def set_file_metadata(
         self, path: str, metadata: dict[str, tuple[str, str]], replace: bool = False
     ) -> None:
@@ -237,15 +252,7 @@ class DataStoreAPI:
             replace: If True, clear existing metadata before adding new
         """
         data_obj = self.session.data_objects.get(path)
-
-        if replace:
-            # Clear existing metadata
-            for avu in data_obj.metadata.items():
-                data_obj.metadata.remove(avu)
-
-        # Add new metadata
-        for attribute, (value, units) in metadata.items():
-            data_obj.metadata.add(attribute, value, units if units else None)
+        self._set_metadata_on_object(data_obj, metadata, replace)
 
     def set_collection_metadata(
         self, path: str, metadata: dict[str, tuple[str, str]], replace: bool = False
@@ -258,15 +265,7 @@ class DataStoreAPI:
             replace: If True, clear existing metadata before adding new
         """
         collection = self.session.collections.get(path)
-
-        if replace:
-            # Clear existing metadata
-            for avu in collection.metadata.items():
-                collection.metadata.remove(avu)
-
-        # Add new metadata
-        for attribute, (value, units) in metadata.items():
-            collection.metadata.add(attribute, value, units if units else None)
+        self._set_metadata_on_object(collection, metadata, replace)
 
     def delete_file(self, path: str, dry_run: bool = False) -> dict[str, Any]:
         """Delete an iRODS data object.

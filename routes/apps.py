@@ -18,10 +18,19 @@ from exceptions import (
     ServiceUnavailableError,
     ValidationError,
 )
+from utils import (
+    compare_dates,
+    is_placeholder_value,
+    parse_iso_date_to_datetime,
+    strip_user_suffix,
+    validate_uuid,
+)
 
 # Simple in-memory cache for VICE URL checks
 # Format: {url: (timestamp, ready, details)}
 _vice_url_cache: dict[str, tuple[float, bool, dict[str, Any]]] = {}
+
+
 
 
 async def check_vice_url_ready(url: str) -> tuple[bool, dict[str, Any]]:
@@ -291,7 +300,7 @@ def resolve_user_email(
     Returns:
         Resolved email address
     """
-    if not email_from_body or email_from_body == "string":
+    if is_placeholder_value(email_from_body):
         # Try to get email from JWT token, fall back to constructing from username
         email = user.get("email")
         if not email:
@@ -300,6 +309,64 @@ def resolve_user_email(
         else:
             return email
     return email_from_body
+
+
+async def prepare_submission_dict(
+    submission: dict[str, Any],
+    app_id: str,
+    system_id: str,
+    user: dict[str, Any],
+    username: str,
+    output_zone: str,
+) -> tuple[dict[str, Any], str]:
+    """Prepare submission dictionary with defaults and validation.
+
+    Args:
+        submission: Raw submission from request body
+        app_id: App UUID string
+        system_id: System identifier
+        user: JWT token user data
+        username: Extracted username
+        output_zone: iRODS zone for output
+
+    Returns:
+        Tuple of (prepared submission dict, email for query param)
+    """
+    submission_dict = dict(submission)
+    submission_dict["app_id"] = app_id
+
+    # Resolve email
+    email_from_body = submission_dict.get("email", "")
+    submission_dict["email"] = resolve_user_email(email_from_body, user, username)
+
+    # Resolve system_id
+    if is_placeholder_value(submission_dict.get("system_id")):
+        submission_dict["system_id"] = system_id
+
+    # Set defaults
+    submission_dict.setdefault("debug", False)
+    submission_dict.setdefault("notify", True)
+    submission_dict.setdefault("config", {})
+
+    # Generate name if needed
+    if is_placeholder_value(submission_dict.get("name")):
+        submission_dict["name"] = await generate_analysis_name(
+            submission_dict.get("app_id"), username, system_id
+        )
+
+    # Generate output_dir if needed
+    if is_placeholder_value(submission_dict.get("output_dir")):
+        analysis_name = submission_dict.get("name", "analysis")
+        submission_dict["output_dir"] = generate_output_directory(
+            output_zone, username, analysis_name
+        )
+
+    # Remove placeholder requirements
+    if should_remove_placeholder_requirements(submission_dict.get("requirements")):
+        submission_dict.pop("requirements", None)
+
+    email_for_query = str(submission_dict.pop("email"))
+    return submission_dict, email_for_query
 
 
 router = APIRouter(prefix="", tags=["Apps"])
@@ -424,34 +491,102 @@ def parse_date_filter(filter_expr: str) -> tuple[str, datetime]:
     return (sql_operator, dt)
 
 
-def compare_dates(app_date: datetime, operator: str, filter_date: datetime) -> bool:
-    """
-    Compare two dates using the specified operator.
+def format_app_for_response(app: dict[str, Any]) -> dict[str, Any]:
+    """Format an app from apps service to formation's simpler format.
 
     Args:
-        app_date: Date from the app (with or without timezone)
-        operator: Comparison operator (>, <, >=, <=, =)
-        filter_date: Date from the filter (naive UTC datetime)
+        app: App dictionary from apps service
 
     Returns:
-        True if the comparison matches, False otherwise
+        Formatted app dictionary
     """
-    # Convert app_date to naive UTC if it has timezone info
-    if app_date.tzinfo is not None:
-        app_date = app_date.astimezone(UTC).replace(tzinfo=None)
+    integrator_name = strip_user_suffix(app.get("integrator_name"), config.user_suffix)
 
-    if operator == ">":
-        return app_date > filter_date
-    elif operator == "<":
-        return app_date < filter_date
-    elif operator == ">=":
-        return app_date >= filter_date
-    elif operator == "<=":
-        return app_date <= filter_date
-    elif operator == "=":
-        return app_date == filter_date
-    else:
-        return False
+    return {
+        "id": app.get("id"),
+        "name": app.get("name"),
+        "description": app.get("description"),
+        "version": app.get("version"),
+        "integrator_username": integrator_name,
+        "integration_date": app.get("integration_date"),
+        "edited_date": app.get("edited_date"),
+        "system_id": app.get("system_id"),
+        "overall_job_type": app.get("overall_job_type"),
+    }
+
+
+def apply_date_filter(
+    apps: list[dict[str, Any]],
+    date_field: str,
+    date_filter: tuple[str, datetime] | None,
+) -> list[dict[str, Any]]:
+    """Filter apps by date field using comparison operator.
+
+    Args:
+        apps: List of app dictionaries
+        date_field: Name of date field to filter on
+        date_filter: Tuple of (operator, datetime) or None
+
+    Returns:
+        Filtered list of apps
+    """
+    if not date_filter:
+        return apps
+
+    operator, dt = date_filter
+    filtered_apps = []
+
+    for app in apps:
+        if app.get(date_field):
+            app_date = parse_iso_date_to_datetime(app[date_field])
+            if compare_dates(app_date, operator, dt):
+                filtered_apps.append(app)
+
+    return filtered_apps
+
+
+def filter_apps(
+    apps: list[dict[str, Any]],
+    description: str | None,
+    integrator: str | None,
+    integration_date_filter: tuple[str, datetime] | None,
+    edited_date_filter: tuple[str, datetime] | None,
+) -> list[dict[str, Any]]:
+    """Apply client-side filters to apps list.
+
+    Args:
+        apps: List of apps to filter
+        description: Description substring filter
+        integrator: Integrator name filter
+        integration_date_filter: Integration date filter tuple
+        edited_date_filter: Edited date filter tuple
+
+    Returns:
+        Filtered list of apps
+    """
+    # Apply description filter
+    if description:
+        apps = [
+            app
+            for app in apps
+            if description.lower() in (app.get("description") or "").lower()
+        ]
+
+    # Apply integrator filter
+    if integrator:
+        integrator_search = strip_user_suffix(integrator, config.user_suffix)
+        apps = [
+            app
+            for app in apps
+            if integrator_search
+            and integrator_search.lower() in (app.get("integrator_name") or "").lower()
+        ]
+
+    # Apply date filters
+    apps = apply_date_filter(apps, "integration_date", integration_date_filter)
+    apps = apply_date_filter(apps, "edited_date", edited_date_filter)
+
+    return apps
 
 
 @router.get("/apps/job-types")
@@ -536,80 +671,16 @@ async def list_apps(
         ]
 
     # Apply client-side filters
-    if description:
-        apps = [
-            app
-            for app in apps
-            if description.lower() in (app.get("description") or "").lower()
-        ]
-
-    if integrator:
-        # Strip user suffix if provided
-        integrator_search = integrator
-        if config.user_suffix and integrator_search.endswith(config.user_suffix):
-            integrator_search = integrator_search[: -len(config.user_suffix)]
-
-        apps = [
-            app
-            for app in apps
-            if integrator_search.lower()
-            in (app.get("integrator_name") or "").lower()
-        ]
-
-    if integration_date_filter:
-        operator, dt = integration_date_filter
-        apps = [
-            app
-            for app in apps
-            if app.get("integration_date")
-            and compare_dates(
-                datetime.fromisoformat(
-                    app["integration_date"].replace("Z", "+00:00")
-                ),
-                operator,
-                dt,
-            )
-        ]
-
-    if edited_date_filter:
-        operator, dt = edited_date_filter
-        apps = [
-            app
-            for app in apps
-            if app.get("edited_date")
-            and compare_dates(
-                datetime.fromisoformat(app["edited_date"].replace("Z", "+00:00")),
-                operator,
-                dt,
-            )
-        ]
+    apps = filter_apps(
+        apps, description, integrator, integration_date_filter, edited_date_filter
+    )
 
     # Apply pagination after filtering
     total = len(apps)
     apps = apps[offset : offset + limit]
 
     # Transform to formation's simpler format
-    formatted_apps = []
-    for app in apps:
-        # Remove user suffix from integrator name
-        integrator_name = app.get("integrator_name")
-        if integrator_name and config.user_suffix:
-            if integrator_name.endswith(config.user_suffix):
-                integrator_name = integrator_name[: -len(config.user_suffix)]
-
-        formatted_apps.append(
-            {
-                "id": app.get("id"),
-                "name": app.get("name"),
-                "description": app.get("description"),
-                "version": app.get("version"),
-                "integrator_username": integrator_name,
-                "integration_date": app.get("integration_date"),
-                "edited_date": app.get("edited_date"),
-                "system_id": app.get("system_id"),
-                "overall_job_type": app.get("overall_job_type"),
-            }
-        )
+    formatted_apps = [format_app_for_response(app) for app in apps]
 
     return {"total": total, "apps": formatted_apps}
 
@@ -694,10 +765,7 @@ async def get_app_parameters(
     username = extract_user_from_jwt(user)
 
     # Convert string to UUID
-    try:
-        app_uuid = UUID(app_id)
-    except ValueError:
-        raise ValidationError("Invalid app ID format", field="app_id")
+    app_uuid = validate_uuid(app_id, "app_id")
 
     # Get full app definition from apps service
     app_data = await apps_client.get_app(app_uuid, username, system_id=system_id)
@@ -743,65 +811,16 @@ async def launch_app(
     username = extract_user_from_jwt(user)
 
     # Validate app_id format
-    try:
-        UUID(app_id)
-    except ValueError:
-        raise ValidationError("Invalid app ID format", field="app_id")
+    validate_uuid(app_id, "app_id")
 
     # Create empty submission if body is None
     if submission is None:
         submission = {}
 
-    # Convert to regular dict for internal processing
-    submission_dict: dict[str, Any] = dict(submission)
-
-    # Inject app_id from path parameter
-    submission_dict["app_id"] = app_id
-
-    # Add defaults for optional fields
-    # email: Extract from JWT token if not provided, or if provided value is placeholder
-    email_from_body = submission_dict.get("email", "")
-    submission_dict["email"] = resolve_user_email(email_from_body, user, username)
-
-    # system_id: Use the provided system_id parameter if not in submission body
-    system_id_from_body = submission_dict.get("system_id", "")
-    if not system_id_from_body or system_id_from_body == "string":
-        submission_dict["system_id"] = system_id
-
-    # debug: Default to False (don't retain inputs for debugging)
-    if "debug" not in submission_dict:
-        submission_dict["debug"] = False
-
-    # notify: Default to True (send email notifications on completion)
-    if "notify" not in submission_dict:
-        submission_dict["notify"] = True
-
-    # config: Default to empty dict (no parameter overrides)
-    if "config" not in submission_dict:
-        submission_dict["config"] = {}
-
-    # name: Generate descriptive name if not provided or if placeholder
-    name_from_body = submission_dict.get("name", "")
-    if not name_from_body or name_from_body == "string":
-        submission_dict["name"] = await generate_analysis_name(
-            submission_dict.get("app_id"), username, system_id
-        )
-
-    # output_dir: Generate default if not provided or if placeholder
-    output_dir_from_body = submission_dict.get("output_dir", "")
-    if not output_dir_from_body or output_dir_from_body == "string":
-        analysis_name = submission_dict.get("name", "analysis")
-        submission_dict["output_dir"] = generate_output_directory(
-            output_zone, username, analysis_name
-        )
-
-    # requirements: Remove if it's a placeholder value
-    requirements_from_body = submission_dict.get("requirements", [])
-    if should_remove_placeholder_requirements(requirements_from_body):
-        submission_dict.pop("requirements", None)
-
-    # Extract email for query parameter (apps service expects it in query params, not body)
-    email_for_query = str(submission_dict.pop("email"))
+    # Prepare submission with defaults and validation
+    submission_dict, email_for_query = await prepare_submission_dict(
+        submission, app_id, system_id, user, username, output_zone
+    )
 
     response = await apps_client.submit_analysis(
         submission_dict, username, email_for_query
@@ -850,10 +869,7 @@ async def get_app_status(
     username = extract_user_from_jwt(user)
 
     # Validate analysis_id format
-    try:
-        analysis_uuid = UUID(analysis_id)
-    except ValueError:
-        raise ValidationError("Invalid analysis ID format", field="analysis_id")
+    analysis_uuid = validate_uuid(analysis_id, "analysis_id")
 
     # Get analysis info from apps service
     analysis = await apps_client.get_analysis(analysis_uuid, username)
@@ -912,10 +928,7 @@ async def control_app(
         )
 
     # Validate analysis_id format
-    try:
-        analysis_uuid = UUID(analysis_id)
-    except ValueError:
-        raise ValidationError("Invalid analysis ID format", field="analysis_id")
+    analysis_uuid = validate_uuid(analysis_id, "analysis_id")
 
     result: dict[str, Any]
     if operation == "extend_time":

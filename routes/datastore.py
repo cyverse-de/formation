@@ -25,67 +25,30 @@ datastore = ds.DataStoreAPI(
 )
 
 
-async def get_file_metadata_async(path: str, delimiter: str) -> dict[str, str]:
-    """Async wrapper for getting file metadata."""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None, datastore.get_file_metadata, path, delimiter
-    )
+async def run_in_executor_async(func, *args, **kwargs):
+    """Generic async wrapper to run blocking functions in an executor.
 
+    Args:
+        func: The blocking function to execute
+        *args: Positional arguments to pass to the function
+        **kwargs: Keyword arguments to pass to the function
 
-async def get_collection_metadata_async(path: str, delimiter: str) -> dict[str, str]:
-    """Async wrapper for getting collection metadata."""
+    Returns:
+        The result of the function execution
+    """
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None, datastore.get_collection_metadata, path, delimiter
-    )
+    if kwargs:
+        # Use partial to bind keyword arguments
+        from functools import partial
+        func_with_kwargs = partial(func, **kwargs)
+        return await loop.run_in_executor(None, func_with_kwargs, *args)
+    return await loop.run_in_executor(None, func, *args)
 
 
 async def guess_content_type_async(path: str) -> str:
     """Async wrapper for content type detection."""
-    loop = asyncio.get_event_loop()
-    content_type, _ = await loop.run_in_executor(None, mimetypes.guess_type, path)
+    content_type, _ = await run_in_executor_async(mimetypes.guess_type, path)
     return content_type if content_type is not None else "application/octet-stream"
-
-
-async def create_directory_async(path: str) -> None:
-    """Async wrapper for creating a directory."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, datastore.create_directory, path)
-
-
-async def upload_file_async(path: str, content: bytes) -> None:
-    """Async wrapper for uploading a file."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, datastore.upload_file, path, content)
-
-
-async def set_file_metadata_async(
-    path: str, metadata: dict[str, tuple[str, str]], replace: bool = False
-) -> None:
-    """Async wrapper for setting file metadata."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, datastore.set_file_metadata, path, metadata, replace)
-
-
-async def set_collection_metadata_async(
-    path: str, metadata: dict[str, tuple[str, str]], replace: bool = False
-) -> None:
-    """Async wrapper for setting collection metadata."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(
-        None, datastore.set_collection_metadata, path, metadata, replace
-    )
-
-
-async def delete_path_async(
-    path: str, recurse: bool = False, dry_run: bool = False
-) -> dict[str, Any]:
-    """Async wrapper for deleting a path."""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None, datastore.delete_path, path, recurse, dry_run
-    )
 
 
 @router.get(
@@ -196,7 +159,11 @@ async def browse_directory(
 
         # Add metadata retrieval task if requested
         if include_metadata:
-            tasks.append(get_file_metadata_async(irods_path, avu_delimiter))
+            tasks.append(
+                run_in_executor_async(
+                    datastore.get_file_metadata, irods_path, avu_delimiter
+                )
+            )
         else:
             # Create a simple async function that returns empty dict
             async def empty_metadata():
@@ -245,8 +212,8 @@ async def browse_directory(
     # Get collection metadata as headers if requested asynchronously
     metadata_headers = {}
     if include_metadata:
-        metadata_headers = await get_collection_metadata_async(
-            irods_path, avu_delimiter
+        metadata_headers = await run_in_executor_async(
+            datastore.get_collection_metadata, irods_path, avu_delimiter
         )
 
     return JSONResponse(content=response_data, headers=metadata_headers)
@@ -367,11 +334,15 @@ async def put_data(
             if is_collection:
                 raise BadRequestError("Cannot upload file - path is a directory")
 
-            await upload_file_async(irods_path, body_content)
+            await run_in_executor_async(
+                datastore.upload_file, irods_path, body_content
+            )
 
             # Set metadata if provided
             if metadata:
-                await set_file_metadata_async(irods_path, metadata, replace_metadata)
+                await run_in_executor_async(
+                    datastore.set_file_metadata, irods_path, metadata, replace_metadata
+                )
 
             return JSONResponse(
                 content={
@@ -383,11 +354,13 @@ async def put_data(
         else:
             # Metadata-only update
             if is_file:
-                await set_file_metadata_async(irods_path, metadata, replace_metadata)
+                await run_in_executor_async(
+                    datastore.set_file_metadata, irods_path, metadata, replace_metadata
+                )
                 resource_type_result = "data_object"
             else:
-                await set_collection_metadata_async(
-                    irods_path, metadata, replace_metadata
+                await run_in_executor_async(
+                    datastore.set_collection_metadata, irods_path, metadata, replace_metadata
                 )
                 resource_type_result = "collection"
 
@@ -413,11 +386,15 @@ async def put_data(
 
         if has_content:
             # Create file with content
-            await upload_file_async(irods_path, body_content)
+            await run_in_executor_async(
+                datastore.upload_file, irods_path, body_content
+            )
 
             # Set metadata if provided
             if metadata:
-                await set_file_metadata_async(irods_path, metadata, replace_metadata)
+                await run_in_executor_async(
+                    datastore.set_file_metadata, irods_path, metadata, replace_metadata
+                )
 
             return JSONResponse(
                 content={
@@ -428,12 +405,12 @@ async def put_data(
             )
         elif resource_type == "directory":
             # Create directory
-            await create_directory_async(irods_path)
+            await run_in_executor_async(datastore.create_directory, irods_path)
 
             # Set metadata if provided
             if metadata:
-                await set_collection_metadata_async(
-                    irods_path, metadata, replace_metadata
+                await run_in_executor_async(
+                    datastore.set_collection_metadata, irods_path, metadata, replace_metadata
                 )
 
             return JSONResponse(
@@ -561,6 +538,8 @@ async def delete_data(
                 )
 
     # Perform deletion (or dry-run)
-    result = await delete_path_async(irods_path, recurse=recurse, dry_run=dry_run)
+    result = await run_in_executor_async(
+        datastore.delete_path, irods_path, recurse=recurse, dry_run=dry_run
+    )
 
     return JSONResponse(content=result)
