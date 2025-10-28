@@ -782,3 +782,24 @@ class TestListAnalyses:
         """Test listing analyses without authentication."""
         response = client.get("/apps/analyses/")
         assert response.status_code == 403  # FastAPI returns 403 for missing bearer
+
+
+class TestListJobTypes:
+    """Tests for the GET /apps/job-types endpoint."""
+
+    def test_list_job_types_success(self, client, mock_token_verification):
+        """Test listing job types with authentication."""
+        response = client.get(
+            "/apps/job-types",
+            headers={"Authorization": "Bearer fake-token"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "job_types" in data
+        assert isinstance(data["job_types"], list)
+        assert len(data["job_types"]) > 0
+
+    def test_list_job_types_unauthorized(self, client):
+        """Test listing job types without authentication."""
+        response = client.get("/apps/job-types")
+        assert response.status_code == 403  # FastAPI returns 403 for missing bearer

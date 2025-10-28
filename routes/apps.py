@@ -593,7 +593,9 @@ def filter_apps(
 
 
 @router.get("/apps/job-types")
-async def list_job_types() -> dict[str, Any]:
+async def list_job_types(
+    auth_info: dict[str, Any] = Depends(get_current_user_or_service_account),
+) -> dict[str, Any]:
     """List valid job types for filtering apps.
 
     Returns the job type values that can be used with the job_type
