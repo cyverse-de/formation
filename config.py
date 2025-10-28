@@ -94,6 +94,33 @@ class Config:
         # Use irods zone as the output zone
         self.output_zone = self.irods_zone
 
+        # Service account configuration
+        # When True, only service account authentication is accepted (user auth disabled)
+        # Useful for testing service account authorization
+        service_accounts_only_env = os.environ.get("SERVICE_ACCOUNTS_ONLY")
+        if service_accounts_only_env is not None:
+            self.service_accounts_only = service_accounts_only_env.lower() == "true"
+        else:
+            service_accounts_only_json = app_config.get("service_accounts_only", False)
+            self.service_accounts_only = bool(service_accounts_only_json)
+
+        # Service account username mapping
+        # Maps role names to usernames used when calling backend services
+        # If a role is not in the map, the role name itself is used as the username
+        service_account_usernames_env = os.environ.get("SERVICE_ACCOUNT_USERNAMES")
+        if service_account_usernames_env is not None:
+            try:
+                self.service_account_usernames = json.loads(service_account_usernames_env)
+            except json.JSONDecodeError as e:
+                print(
+                    f"Invalid JSON in SERVICE_ACCOUNT_USERNAMES: {service_account_usernames_env}",
+                    file=sys.stderr,
+                )
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            self.service_account_usernames = app_config.get("service_account_usernames", {})
+
     def _load_json_config(self) -> dict[str, Any]:
         """Load configuration from JSON file if it exists.
 

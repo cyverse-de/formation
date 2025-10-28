@@ -67,6 +67,67 @@ async def verify_token(
         raise HTTPException(status_code=401, detail=f"Authentication error: {str(e)}")
 
 
+def is_service_account(jwt_payload: dict[str, Any]) -> bool:
+    """
+    Check if a JWT payload represents a service account.
+
+    Service accounts are identified by their preferred_username starting with "service-account-".
+
+    Args:
+        jwt_payload: Decoded JWT payload dictionary
+
+    Returns:
+        True if the payload represents a service account, False otherwise
+    """
+    preferred_username = jwt_payload.get("preferred_username", "")
+    return preferred_username.startswith("service-account-")
+
+
+def extract_service_account_from_jwt(jwt_payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Extract service account information from a JWT payload.
+
+    Args:
+        jwt_payload: Decoded JWT payload dictionary
+
+    Returns:
+        Dictionary containing service account username and roles:
+        {
+            "username": "service-account-...",
+            "roles": ["role1", "role2", ...]
+        }
+    """
+    return {
+        "username": jwt_payload.get("preferred_username", ""),
+        "roles": jwt_payload.get("realm_access", {}).get("roles", []),
+    }
+
+
+def sanitize_username(username: str) -> str:
+    """
+    Sanitize a username for use with backend systems.
+
+    Removes all special characters, keeping only lowercase letters and numbers.
+    This ensures usernames are compatible with backend system requirements.
+
+    Args:
+        username: The username to sanitize (e.g., "de-service-account", "app-runner")
+
+    Returns:
+        Sanitized username with only lowercase letters and numbers
+
+    Examples:
+        >>> sanitize_username("de-service-account")
+        'deserviaceaccount'
+        >>> sanitize_username("app-runner")
+        'apprunner'
+        >>> sanitize_username("Service123_Account")
+        'service123account'
+    """
+    # Remove all non-alphanumeric characters and convert to lowercase
+    return "".join(char.lower() for char in username if char.isalnum())
+
+
 async def get_access_token(
     keycloak_server_url: str,
     keycloak_realm: str,

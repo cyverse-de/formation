@@ -24,6 +24,10 @@
     "path_prefix": "/formation",
     "vice_url_check_timeout": 5.0,
     "vice_url_check_retries": 3,
-    "vice_url_check_cache_ttl": 5.0
+    "vice_url_check_cache_ttl": 5.0,
+    "service_accounts_only": false,
+    "service_account_usernames": {
+      "app-runner": "de-service-account"
+    }
   }
 }

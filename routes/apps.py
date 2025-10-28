@@ -13,7 +13,10 @@ from fastapi import APIRouter, Depends
 
 from clients import AppExposerClient, AppsClient
 from config import config
-from dependencies import extract_user_from_jwt, get_current_user
+from dependencies import (
+    extract_username_from_auth,
+    get_current_user_or_service_account,
+)
 from exceptions import (
     ServiceUnavailableError,
     ValidationError,
@@ -602,7 +605,7 @@ async def list_job_types() -> dict[str, Any]:
 
 @router.get("/apps")
 async def list_apps(
-    current_user: Any = Depends(get_current_user),
+    auth_info: dict[str, Any] = Depends(get_current_user_or_service_account),
     limit: int = 100,
     offset: int = 0,
     name: str | None = None,
@@ -615,6 +618,7 @@ async def list_apps(
     """List apps available to the user.
 
     Returns a list of apps that the user has access to, optionally filtered by job type.
+    Supports both user authentication and service account authentication with "app-runner" role.
 
     The returned `system_id` field should be used as the `system_id` path parameter when
     interacting with the app through other endpoints (e.g., `/apps/{system_id}/{app_id}/parameters`,
@@ -635,7 +639,7 @@ async def list_apps(
     if not apps_client:
         raise ServiceUnavailableError("Apps")
 
-    username = extract_user_from_jwt(current_user)
+    username = extract_username_from_auth(auth_info)
 
     # Normalize job type (e.g., "VICE" -> "Interactive")
     normalized_job_type = normalize_job_type(job_type)
@@ -688,12 +692,13 @@ async def list_apps(
 @router.get("/apps/analyses/")
 async def list_analyses(
     status: str = "Running",
-    user: Any = Depends(get_current_user),
+    auth_info: dict[str, Any] = Depends(get_current_user_or_service_account),
 ) -> dict[str, Any]:
     """List analyses for the authenticated user, filtered by status.
 
     Returns analyses filtered by the specified status. By default, returns only
-    running analyses.
+    running analyses. Supports both user authentication and service account
+    authentication with "app-runner" role.
 
     Args:
         status: Status filter (default: "Running"). Common values:
@@ -713,7 +718,7 @@ async def list_analyses(
     if not apps_client:
         raise ServiceUnavailableError("Apps")
 
-    username = extract_user_from_jwt(user)
+    username = extract_username_from_auth(auth_info)
 
     # Get analyses from apps service with status filter
     result = await apps_client.list_analyses(username, status=status)
@@ -738,12 +743,14 @@ async def list_analyses(
 async def get_app_parameters(
     system_id: str,
     app_id: str,
-    user: Any = Depends(get_current_user),
+    auth_info: dict[str, Any] = Depends(get_current_user_or_service_account),
 ) -> dict[str, Any]:
     """Get parameter definitions for a specific app.
 
     Returns the parameter groups and definitions needed to launch the app,
     including parameter types, labels, default values, and validation rules.
+    Supports both user authentication and service account authentication with
+    "app-runner" role.
 
     Args:
         system_id: System identifier from the app listing (use the `system_id` field
@@ -762,7 +769,7 @@ async def get_app_parameters(
     if not apps_client:
         raise ServiceUnavailableError("Apps")
 
-    username = extract_user_from_jwt(user)
+    username = extract_username_from_auth(auth_info)
 
     # Convert string to UUID
     app_uuid = validate_uuid(app_id, "app_id")
@@ -783,14 +790,15 @@ async def launch_app(
     system_id: str,
     app_id: str,
     submission: dict[str, Any] | None = None,
-    user: Any = Depends(get_current_user),
+    auth_info: dict[str, Any] = Depends(get_current_user_or_service_account),
     output_zone: str | None = None,
 ) -> dict[str, Any]:
     """Launch an app.
 
     Submits an analysis to launch the specified app with the provided
     configuration. Returns the analysis ID and optionally the URL once
-    the deployment is ready (for interactive/VICE apps).
+    the deployment is ready (for interactive/VICE apps). Supports both
+    user authentication and service account authentication with "app-runner" role.
 
     Args:
         system_id: System identifier from the app listing (use the `system_id` field
@@ -808,7 +816,7 @@ async def launch_app(
     if output_zone is None:
         output_zone = config.output_zone
 
-    username = extract_user_from_jwt(user)
+    username = extract_username_from_auth(auth_info)
 
     # Validate app_id format
     validate_uuid(app_id, "app_id")
@@ -817,9 +825,12 @@ async def launch_app(
     if submission is None:
         submission = {}
 
+    # Get the user payload for prepare_submission_dict
+    user_payload = auth_info.get("user", {})
+
     # Prepare submission with defaults and validation
     submission_dict, email_for_query = await prepare_submission_dict(
-        submission, app_id, system_id, user, username, output_zone
+        submission, app_id, system_id, user_payload, username, output_zone
     )
 
     response = await apps_client.submit_analysis(
@@ -848,12 +859,14 @@ async def launch_app(
 @router.get("/apps/analyses/{analysis_id}/status")
 async def get_app_status(
     analysis_id: str,
-    user: Any = Depends(get_current_user),
+    auth_info: dict[str, Any] = Depends(get_current_user_or_service_account),
 ) -> dict[str, Any]:
     """Get the status of a running analysis.
 
     Returns the current status of the analysis, including whether
-    the interactive app is ready and its URL (for VICE apps).
+    the interactive app is ready and its URL (for VICE apps). Supports
+    both user authentication and service account authentication with
+    "app-runner" role.
 
     The `url_ready` field indicates if the VICE app URL is accessible by
     directly probing it with HTTP requests (with retries and caching).
@@ -866,7 +879,7 @@ async def get_app_status(
     if not apps_client or not app_exposer_client:
         raise ServiceUnavailableError("Required services")
 
-    username = extract_user_from_jwt(user)
+    username = extract_username_from_auth(auth_info)
 
     # Validate analysis_id format
     analysis_uuid = validate_uuid(analysis_id, "analysis_id")
@@ -904,18 +917,19 @@ async def get_app_status(
 async def control_app(
     analysis_id: str,
     operation: str,
-    user: Any = Depends(get_current_user),
+    auth_info: dict[str, Any] = Depends(get_current_user_or_service_account),
 ) -> dict[str, Any]:
     """Control a running analysis (extend time, save & exit, exit).
 
     Supports actions like extending the time limit, saving outputs and
-    exiting, or exiting without saving.
+    exiting, or exiting without saving. Supports both user authentication
+    and service account authentication with "app-runner" role.
 
     Args:
         analysis_id: Analysis UUID (returned by the `/app/launch/{system_id}/{app_id}` endpoint)
         operation: Control operation to perform (extend_time, save_and_exit, or exit)
     """
-    del user  # Unused but required for authentication
+    del auth_info  # Unused but required for authentication
 
     if not app_exposer_client:
         raise ServiceUnavailableError("App-exposer")
