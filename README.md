@@ -175,17 +175,64 @@ export SERVICE_ACCOUNT_USERNAMES='{"app-runner": "de-service-account"}'
 
 **Username Sanitization:**
 
-Service account usernames are automatically sanitized before being sent to backend services:
+Service account usernames are automatically sanitized before being sent to backend services. This sanitization applies to **service accounts only** (usernames with `"service-account-"` prefix) - regular user JWTs are not sanitized.
+
+**Sanitization rules:**
 - All special characters are removed (hyphens, underscores, dots, etc.)
 - Converted to lowercase
-- Only letters and numbers are retained
+- Only letters and numbers (alphanumeric) are retained
 
-Examples:
+**Transformation examples:**
 - `"de-service-account"` → `"deserviceaccount"`
 - `"app-runner"` → `"apprunner"`
 - `"Service_Account_123"` → `"serviceaccount123"`
+- `"portal-conductor-service"` → `"portalconductorservice"`
 
-This ensures compatibility with backend system username requirements.
+**⚠️ CRITICAL: Implications for Downstream Services**
+
+This sanitization affects how usernames appear in downstream services, particularly for whitelist-based access control:
+
+1. **Apps Service**: Receives the sanitized username via the `user` query parameter
+2. **App-Exposer**: Checks the sanitized username against the resource tracking bypass whitelist
+
+**Example - App-Exposer Whitelist Configuration:**
+
+If you configure Formation with:
+```json
+{
+  "service_account_usernames": {
+    "app-runner": "de-service-account"
+  }
+}
+```
+
+The sanitized username `"deserviceaccount"` (not `"de-service-account"`) will be sent to app-exposer. Therefore, your app-exposer whitelist must use the sanitized form:
+
+```yaml
+# app-exposer config.yml
+resource_tracking:
+  bypass_users:
+    - deserviceaccount      # ✅ Correct - matches sanitized form
+    # NOT "de-service-account" - that will not match!
+```
+
+**Username Flow:**
+```
+Formation config: "de-service-account"
+    ↓ (sanitization)
+Sent to apps/app-exposer: "deserviceaccount"
+    ↓ (whitelist check)
+App-exposer whitelist: "deserviceaccount" (must match sanitized form)
+```
+
+**Debugging Tip:**
+
+Check app-exposer logs to see the actual username being checked:
+```
+Resource tracking disabled for user deserviceaccount (in bypass whitelist), skipping validation
+```
+
+This ensures compatibility with backend system username requirements while maintaining security through consistent username handling.
 
 **Testing Service Account Authentication:**
 To test service account authentication in isolation, you can disable regular user authentication:
