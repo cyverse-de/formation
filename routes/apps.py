@@ -713,6 +713,7 @@ async def list_analyses(
     Returns:
         Dictionary with 'analyses' list, where each analysis contains:
         - analysis_id: Analysis UUID
+        - name: Analysis name
         - app_id: App UUID that was launched
         - system_id: System identifier (e.g., 'de', 'hpc')
         - status: Current status
@@ -732,6 +733,7 @@ async def list_analyses(
         formatted_analyses.append(
             {
                 "analysis_id": analysis.get("id"),
+                "name": analysis.get("name"),
                 "app_id": analysis.get("app_id"),
                 "system_id": analysis.get("system_id"),
                 "status": analysis.get("status"),
@@ -958,3 +960,47 @@ async def control_app(
         result["operation"] = operation
 
     return result
+
+
+@router.get("/apps/analyses/{analysis_id}/details")
+async def get_analysis_details(
+    analysis_id: str,
+    auth_info: dict[str, Any] = Depends(get_current_user_or_service_account),
+) -> dict[str, Any]:
+    """Get detailed information about an analysis including submission parameters.
+
+    Returns the full analysis details from the apps service, including the
+    submission configuration, parameters, username, timestamps, and status.
+    Supports both user authentication and service account authentication with
+    "app-runner" role.
+
+    Args:
+        analysis_id: Analysis UUID
+
+    Returns:
+        Dictionary containing:
+        - id: Analysis UUID
+        - name: Analysis name
+        - username: User who submitted the analysis
+        - status: Current status
+        - submission: Full submission configuration including:
+            - config: Parameter values
+            - output_dir: Output directory path
+            - notify: Notification setting
+            - debug: Debug mode setting
+        - start_date: When analysis started
+        - end_date: When analysis ended (if completed)
+        - And other analysis metadata
+    """
+    if not apps_client:
+        raise ServiceUnavailableError("Apps")
+
+    username = extract_username_from_auth(auth_info)
+
+    # Validate analysis_id format
+    analysis_uuid = validate_uuid(analysis_id, "analysis_id")
+
+    # Get full analysis details from apps service
+    analysis = await apps_client.get_analysis(analysis_uuid, username)
+
+    return analysis
