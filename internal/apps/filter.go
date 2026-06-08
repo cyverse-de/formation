@@ -53,7 +53,9 @@ func FilterApps(list []App, f ListFilter) ([]App, error) {
 	out := list
 
 	if jt := NormalizeJobType(f.JobType); jt != "" {
-		out = filter(out, func(a App) bool { return a.OverallJobType == jt })
+		// Compare case-insensitively: different apps-service versions return the
+		// job type capitalized ("Interactive") or lowercased ("interactive").
+		out = filter(out, func(a App) bool { return strings.EqualFold(a.OverallJobType, jt) })
 	}
 	if f.Description != "" {
 		needle := strings.ToLower(f.Description)

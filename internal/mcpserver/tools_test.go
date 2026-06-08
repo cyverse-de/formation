@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/base64"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ type fakeApps struct {
 }
 
 func (f *fakeApps) GetApp(_ context.Context, _, _, _ string) (*apps.App, error) {
-	return &apps.App{Name: "App", Groups: []byte(`[{"id":"g1"}]`), OverallJobType: "Interactive"}, nil
+	return &apps.App{Name: "App", Groups: []map[string]any{{"id": "g1"}}, OverallJobType: "Interactive"}, nil
 }
 func (f *fakeApps) ListApps(_ context.Context, _ string, _, _ int, _ string) (*apps.AppList, error) {
 	return &apps.AppList{Apps: f.apps}, nil
@@ -266,7 +267,7 @@ func TestUploadFilePassesMetadata(t *testing.T) {
 	d.Data = fd
 	_, out, err := d.uploadFile(userCtx(), nil, UploadFileIn{
 		Path:            "/p",
-		Content:         []byte("hi"),
+		Content:         base64.StdEncoding.EncodeToString([]byte("hi")),
 		Metadata:        []MetaIn{{Attribute: "a", Value: "v", Units: "u"}},
 		ReplaceMetadata: true,
 	})

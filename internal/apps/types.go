@@ -1,19 +1,17 @@
 package apps
 
-import "encoding/json"
-
 // App is the subset of an apps-service app record that Formation surfaces.
 type App struct {
-	ID              string          `json:"id"`
-	Name            string          `json:"name"`
-	Description     string          `json:"description"`
-	Version         string          `json:"version"`
-	IntegratorName  string          `json:"integrator_name"`
-	IntegrationDate string          `json:"integration_date"`
-	EditedDate      string          `json:"edited_date"`
-	SystemID        string          `json:"system_id"`
-	OverallJobType  string          `json:"overall_job_type"`
-	Groups          json.RawMessage `json:"groups"`
+	ID              string           `json:"id"`
+	Name            string           `json:"name"`
+	Description     string           `json:"description"`
+	Version         string           `json:"version"`
+	IntegratorName  string           `json:"integrator_name"`
+	IntegrationDate string           `json:"integration_date"`
+	EditedDate      string           `json:"edited_date"`
+	SystemID        string           `json:"system_id"`
+	OverallJobType  string           `json:"overall_job_type"`
+	Groups          []map[string]any `json:"groups"`
 }
 
 // AppList is the apps-service response for a list of apps.

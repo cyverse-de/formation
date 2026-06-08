@@ -2,8 +2,11 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/base64"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/cyverse-de/formation/internal/apperr"
 )
 
 func (d *Deps) browseData(ctx context.Context, _ *mcp.CallToolRequest, in BrowseDataIn) (*mcp.CallToolResult, BrowseDataOut, error) {
@@ -22,10 +25,12 @@ func (d *Deps) browseData(ctx context.Context, _ *mcp.CallToolRequest, in Browse
 	out := BrowseDataOut{
 		Path:     result.Path,
 		Type:     result.Type,
-		Content:  result.Content,
 		Size:     result.Size,
 		Offset:   result.Offset,
 		Metadata: result.Metadata,
+	}
+	if len(result.Content) > 0 {
+		out.Content = base64.StdEncoding.EncodeToString(result.Content)
 	}
 	if len(result.Contents) > 0 {
 		out.Contents = make([]EntryOut, 0, len(result.Contents))
@@ -59,7 +64,11 @@ func (d *Deps) uploadFile(ctx context.Context, _ *mcp.CallToolRequest, in Upload
 	if err := d.requireData(); err != nil {
 		return nil, WriteOut{}, err
 	}
-	result, err := d.Data.UploadFile(id.DownstreamUsername, in.Path, in.Content, toAVUs(in.Metadata), in.ReplaceMetadata)
+	content, err := base64.StdEncoding.DecodeString(in.Content)
+	if err != nil {
+		return nil, WriteOut{}, apperr.Validation("content", "content must be base64-encoded")
+	}
+	result, err := d.Data.UploadFile(id.DownstreamUsername, in.Path, content, toAVUs(in.Metadata), in.ReplaceMetadata)
 	if err != nil {
 		return nil, WriteOut{}, err
 	}

@@ -1,7 +1,5 @@
 package mcpserver
 
-import "encoding/json"
-
 // ListAppsIn are the inputs to the list_apps tool.
 type ListAppsIn struct {
 	Limit           int    `json:"limit,omitempty" jsonschema:"maximum number of apps to return (1-1000, default 100)"`
@@ -39,10 +37,11 @@ type GetAppParametersIn struct {
 	AppID    string `json:"app_id" jsonschema:"app UUID"`
 }
 
-// GetAppParametersOut is the get_app_parameters result.
+// GetAppParametersOut is the get_app_parameters result. Groups is an opaque
+// list of parameter-group objects passed through from the apps service.
 type GetAppParametersOut struct {
-	Groups         json.RawMessage `json:"groups"`
-	OverallJobType string          `json:"overall_job_type"`
+	Groups         []map[string]any `json:"groups"`
+	OverallJobType string           `json:"overall_job_type"`
 }
 
 // LaunchAppIn are the inputs to the launch_app_and_wait tool.
@@ -150,12 +149,12 @@ type EntryOut struct {
 }
 
 // BrowseDataOut is the browse_data result. For directories, Contents is set;
-// for files, Content (base64-encoded by JSON marshaling) is set.
+// for files, Content holds the base64-encoded bytes.
 type BrowseDataOut struct {
 	Path     string            `json:"path"`
 	Type     string            `json:"type"`
 	Contents []EntryOut        `json:"contents,omitempty"`
-	Content  []byte            `json:"content,omitempty"`
+	Content  string            `json:"content,omitempty" jsonschema:"file content, base64-encoded"`
 	Size     int64             `json:"size,omitempty"`
 	Offset   int               `json:"offset,omitempty"`
 	Metadata map[string]string `json:"metadata,omitempty"`
@@ -170,7 +169,7 @@ type CreateDirectoryIn struct {
 // UploadFileIn are the inputs to the upload_file tool.
 type UploadFileIn struct {
 	Path            string   `json:"path" jsonschema:"full iRODS path of the file to create or overwrite"`
-	Content         []byte   `json:"content" jsonschema:"file content (base64-encoded)"`
+	Content         string   `json:"content" jsonschema:"file content, base64-encoded"`
 	Metadata        []MetaIn `json:"metadata,omitempty" jsonschema:"AVU metadata to set on the file"`
 	ReplaceMetadata bool     `json:"replace_metadata,omitempty" jsonschema:"replace existing metadata instead of adding"`
 }
