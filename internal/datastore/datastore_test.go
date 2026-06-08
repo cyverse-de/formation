@@ -1,36 +1,75 @@
 package datastore
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/cyverse/go-irodsclient/irods/common"
 	"github.com/cyverse/go-irodsclient/irods/types"
+
+	"github.com/cyverse-de/formation/internal/apperr"
 )
 
-func TestHasAccess(t *testing.T) {
-	acls := []*types.IRODSAccess{
-		{UserName: "alice", AccessLevel: types.IRODSAccessLevelReadObject},
-		{UserName: "bob", AccessLevel: types.IRODSAccessLevelOwner},
-		{UserName: "carol", AccessLevel: types.IRODSAccessLevelModifyObject},
-	}
-
+func TestClassify(t *testing.T) {
+	d := &DataStore{}
 	tests := []struct {
-		name     string
-		user     string
-		required []types.IRODSAccessLevelType
-		want     bool
+		name   string
+		err    error
+		assert func(t *testing.T, got error)
 	}{
-		{"reader can read", "alice", readLevels, true},
-		{"reader cannot write", "alice", writeLevels, false},
-		{"owner can read", "bob", readLevels, true},
-		{"owner can write", "bob", writeLevels, true},
-		{"modifier can write", "carol", writeLevels, true},
-		{"unknown user denied", "dave", readLevels, false},
+		{
+			name: "file not found -> NotFound",
+			err:  types.NewFileNotFoundError("/p"),
+			assert: func(t *testing.T, got error) {
+				if !apperr.AsNotFound(got) {
+					t.Errorf("want NotFoundError, got %v", got)
+				}
+			},
+		},
+		{
+			name: "no access permission -> PermissionDenied",
+			err:  types.NewIRODSError(common.CAT_NO_ACCESS_PERMISSION),
+			assert: func(t *testing.T, got error) {
+				var pd *apperr.PermissionDeniedError
+				if !errors.As(got, &pd) {
+					t.Errorf("want PermissionDeniedError, got %v", got)
+				}
+			},
+		},
+		{
+			name: "insufficient privilege -> PermissionDenied",
+			err:  types.NewIRODSError(common.CAT_INSUFFICIENT_PRIVILEGE_LEVEL),
+			assert: func(t *testing.T, got error) {
+				var pd *apperr.PermissionDeniedError
+				if !errors.As(got, &pd) {
+					t.Errorf("want PermissionDeniedError, got %v", got)
+				}
+			},
+		},
+		{
+			name: "collection not empty -> BadRequest",
+			err:  types.NewCollectionNotEmptyError("/p"),
+			assert: func(t *testing.T, got error) {
+				var br *apperr.BadRequestError
+				if !errors.As(got, &br) {
+					t.Errorf("want BadRequestError, got %v", got)
+				}
+			},
+		},
+		{
+			name: "unknown error is sanitized",
+			err:  fmt.Errorf("connection reset by peer to internal-host:1247"),
+			assert: func(t *testing.T, got error) {
+				if got.Error() != "data store: op failed" {
+					t.Errorf("error not sanitized: %q", got.Error())
+				}
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := hasAccess(acls, tc.user, tc.required); got != tc.want {
-				t.Errorf("hasAccess(%q) = %v, want %v", tc.user, got, tc.want)
-			}
+			tc.assert(t, d.classify("op", "/p", tc.err))
 		})
 	}
 }

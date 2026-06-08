@@ -171,14 +171,14 @@ type UploadFileIn struct {
 	Path            string   `json:"path" jsonschema:"full iRODS path of the file to create or overwrite"`
 	Content         string   `json:"content" jsonschema:"file content, base64-encoded"`
 	Metadata        []MetaIn `json:"metadata,omitempty" jsonschema:"AVU metadata to set on the file"`
-	ReplaceMetadata bool     `json:"replace_metadata,omitempty" jsonschema:"replace existing metadata instead of adding"`
+	ReplaceMetadata bool     `json:"replace_metadata,omitempty" jsonschema:"replace existing values for these attributes instead of adding"`
 }
 
 // SetMetadataIn are the inputs to the set_metadata tool.
 type SetMetadataIn struct {
 	Path     string   `json:"path" jsonschema:"full iRODS path"`
 	Metadata []MetaIn `json:"metadata" jsonschema:"AVU metadata to set"`
-	Replace  bool     `json:"replace,omitempty" jsonschema:"replace existing metadata instead of adding"`
+	Replace  bool     `json:"replace,omitempty" jsonschema:"replace existing values for these attributes instead of adding"`
 }
 
 // WriteOut is the result of create_directory, upload_file, and set_metadata.

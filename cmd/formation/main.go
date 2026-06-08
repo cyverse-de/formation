@@ -55,7 +55,7 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	run(httpSrv, deps, logger)
+	run(httpSrv, logger)
 }
 
 // buildDeps constructs the backend clients and tool dependencies. The data
@@ -71,29 +71,26 @@ func buildDeps(cfg *config.Config, httpClient *http.Client, logger *slog.Logger)
 		URLCheckCacheTTL: cfg.ViceURLCheckCacheTTL,
 	}, logger)
 
-	deps := &mcpserver.Deps{
-		Apps:       appsClient,
-		Exposer:    exposerClient,
-		Vice:       vice,
-		Logger:     logger,
-		UserSuffix: cfg.UserSuffix,
-		OutputZone: cfg.OutputZone,
-		Version:    version,
-	}
-
-	ds, err := datastore.New(datastore.Config{
+	// The data store connects per request using proxy impersonation, so there
+	// is no startup connection to establish here.
+	ds := datastore.New(datastore.Config{
 		Host:     cfg.IRODSHost,
 		Port:     cfg.IRODSPort,
 		User:     cfg.IRODSUser,
 		Password: cfg.IRODSPassword,
 		Zone:     cfg.IRODSZone,
 	}, logger)
-	if err != nil {
-		logger.Error("could not connect to iRODS at startup; data store tools will be unavailable until restart", "error", err)
-	} else {
-		deps.Data = ds
+
+	return &mcpserver.Deps{
+		Apps:       appsClient,
+		Exposer:    exposerClient,
+		Vice:       vice,
+		Data:       ds,
+		Logger:     logger,
+		UserSuffix: cfg.UserSuffix,
+		OutputZone: cfg.OutputZone,
+		Version:    version,
 	}
-	return deps
 }
 
 // buildHandler assembles the HTTP mux: the protected MCP endpoint, the public
@@ -122,7 +119,7 @@ func buildHandler(cfg *config.Config, httpClient *http.Client, srv *mcp.Server, 
 	return prefixed
 }
 
-func run(httpSrv *http.Server, deps *mcpserver.Deps, logger *slog.Logger) {
+func run(httpSrv *http.Server, logger *slog.Logger) {
 	idleClosed := make(chan struct{})
 	go func() {
 		sig := make(chan os.Signal, 1)
@@ -133,9 +130,6 @@ func run(httpSrv *http.Server, deps *mcpserver.Deps, logger *slog.Logger) {
 		defer cancel()
 		if err := httpSrv.Shutdown(ctx); err != nil {
 			logger.Error("graceful shutdown failed", "error", err)
-		}
-		if ds, ok := deps.Data.(*datastore.DataStore); ok && ds != nil {
-			ds.Close()
 		}
 		close(idleClosed)
 	}()
