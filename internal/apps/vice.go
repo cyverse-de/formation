@@ -208,5 +208,5 @@ func (r *VICEResolver) logf(msg string, args ...any) {
 
 // backoff returns 0.5s * 2^attempt.
 func backoff(attempt int) time.Duration {
-	return time.Duration(float64(500*time.Millisecond) * float64(int(1)<<attempt))
+	return 500 * time.Millisecond << uint(attempt)
 }

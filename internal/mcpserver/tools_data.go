@@ -9,8 +9,8 @@ import (
 	"github.com/cyverse-de/formation/internal/apperr"
 )
 
-func (d *Deps) browseData(ctx context.Context, _ *mcp.CallToolRequest, in BrowseDataIn) (*mcp.CallToolResult, BrowseDataOut, error) {
-	id, err := caller(ctx)
+func (d *Deps) browseData(ctx context.Context, req *mcp.CallToolRequest, in BrowseDataIn) (*mcp.CallToolResult, BrowseDataOut, error) {
+	id, err := caller(ctx, req)
 	if err != nil {
 		return nil, BrowseDataOut{}, err
 	}
@@ -41,8 +41,8 @@ func (d *Deps) browseData(ctx context.Context, _ *mcp.CallToolRequest, in Browse
 	return nil, out, nil
 }
 
-func (d *Deps) createDirectory(ctx context.Context, _ *mcp.CallToolRequest, in CreateDirectoryIn) (*mcp.CallToolResult, WriteOut, error) {
-	id, err := caller(ctx)
+func (d *Deps) createDirectory(ctx context.Context, req *mcp.CallToolRequest, in CreateDirectoryIn) (*mcp.CallToolResult, WriteOut, error) {
+	id, err := caller(ctx, req)
 	if err != nil {
 		return nil, WriteOut{}, err
 	}
@@ -56,8 +56,8 @@ func (d *Deps) createDirectory(ctx context.Context, _ *mcp.CallToolRequest, in C
 	return nil, WriteOut{Path: result.Path, Type: result.Type, Created: result.Created}, nil
 }
 
-func (d *Deps) uploadFile(ctx context.Context, _ *mcp.CallToolRequest, in UploadFileIn) (*mcp.CallToolResult, WriteOut, error) {
-	id, err := caller(ctx)
+func (d *Deps) uploadFile(ctx context.Context, req *mcp.CallToolRequest, in UploadFileIn) (*mcp.CallToolResult, WriteOut, error) {
+	id, err := caller(ctx, req)
 	if err != nil {
 		return nil, WriteOut{}, err
 	}
@@ -75,8 +75,8 @@ func (d *Deps) uploadFile(ctx context.Context, _ *mcp.CallToolRequest, in Upload
 	return nil, WriteOut{Path: result.Path, Type: result.Type, Created: result.Created}, nil
 }
 
-func (d *Deps) setMetadata(ctx context.Context, _ *mcp.CallToolRequest, in SetMetadataIn) (*mcp.CallToolResult, WriteOut, error) {
-	id, err := caller(ctx)
+func (d *Deps) setMetadata(ctx context.Context, req *mcp.CallToolRequest, in SetMetadataIn) (*mcp.CallToolResult, WriteOut, error) {
+	id, err := caller(ctx, req)
 	if err != nil {
 		return nil, WriteOut{}, err
 	}
@@ -90,8 +90,8 @@ func (d *Deps) setMetadata(ctx context.Context, _ *mcp.CallToolRequest, in SetMe
 	return nil, WriteOut{Path: result.Path, Type: result.Type, Created: result.Created}, nil
 }
 
-func (d *Deps) deleteData(ctx context.Context, _ *mcp.CallToolRequest, in DeleteDataIn) (*mcp.CallToolResult, DeleteDataOut, error) {
-	id, err := caller(ctx)
+func (d *Deps) deleteData(ctx context.Context, req *mcp.CallToolRequest, in DeleteDataIn) (*mcp.CallToolResult, DeleteDataOut, error) {
+	id, err := caller(ctx, req)
 	if err != nil {
 		return nil, DeleteDataOut{}, err
 	}

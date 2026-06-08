@@ -42,14 +42,9 @@ func ContextWithIdentity(ctx context.Context, id Identity) context.Context {
 	return context.WithValue(ctx, identityCtxKey{}, id)
 }
 
-// FromContext returns the caller Identity. In production it is read from the
-// TokenInfo the bearer-token middleware stores; a directly-attached Identity
-// (ContextWithIdentity) takes precedence.
-func FromContext(ctx context.Context) Identity {
-	if id, ok := ctx.Value(identityCtxKey{}).(Identity); ok {
-		return id
-	}
-	ti := auth.TokenInfoFromContext(ctx)
+// IdentityFromTokenInfo extracts the Identity carried in a verified TokenInfo,
+// falling back to a minimal Identity built from UserID.
+func IdentityFromTokenInfo(ti *auth.TokenInfo) Identity {
 	if ti == nil {
 		return Identity{}
 	}
@@ -57,6 +52,16 @@ func FromContext(ctx context.Context) Identity {
 		return id
 	}
 	return Identity{DownstreamUsername: ti.UserID}
+}
+
+// FromContext returns the caller Identity. In production it is read from the
+// TokenInfo the bearer-token middleware stores; a directly-attached Identity
+// (ContextWithIdentity) takes precedence.
+func FromContext(ctx context.Context) Identity {
+	if id, ok := ctx.Value(identityCtxKey{}).(Identity); ok {
+		return id
+	}
+	return IdentityFromTokenInfo(auth.TokenInfoFromContext(ctx))
 }
 
 // sanitizeUsername removes all non-alphanumeric characters and lowercases the

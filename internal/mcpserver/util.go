@@ -5,18 +5,31 @@ import (
 	"errors"
 	"regexp"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/cyverse-de/formation/internal/apperr"
 	"github.com/cyverse-de/formation/internal/authz"
 	"github.com/cyverse-de/formation/internal/datastore"
 )
 
-// errUnauthenticated is returned when no identity is present in the context.
+// errUnauthenticated is returned when no identity is present in the request.
 // In practice the bearer-token middleware rejects such requests first.
 var errUnauthenticated = errors.New("unauthenticated")
 
-// caller returns the authenticated identity, or an error if none is present.
-func caller(ctx context.Context) (authz.Identity, error) {
-	id := authz.FromContext(ctx)
+// caller returns the authenticated identity for this tool call, or an error if
+// none is present. It reads the per-call bearer token from the request's
+// RequestExtra (the canonical SDK path), falling back to the context (used by
+// tests via authz.ContextWithIdentity).
+func caller(ctx context.Context, req *mcp.CallToolRequest) (authz.Identity, error) {
+	var id authz.Identity
+	if req != nil {
+		if extra := req.GetExtra(); extra != nil && extra.TokenInfo != nil {
+			id = authz.IdentityFromTokenInfo(extra.TokenInfo)
+		}
+	}
+	if id.DownstreamUsername == "" {
+		id = authz.FromContext(ctx)
+	}
 	if id.DownstreamUsername == "" {
 		return authz.Identity{}, errUnauthenticated
 	}

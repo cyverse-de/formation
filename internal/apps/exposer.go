@@ -26,7 +26,7 @@ func (c *AppExposerClient) GetExternalID(ctx context.Context, analysisID string)
 	var resp struct {
 		ExternalID string `json:"external_id"`
 	}
-	if err := doJSON(ctx, c.httpClient, http.MethodGet, u, nil, "app-exposer", &resp); err != nil {
+	if err := doJSON(ctx, c.httpClient, c.logger, http.MethodGet, u, nil, "app-exposer", &resp); err != nil {
 		return "", err
 	}
 	return resp.ExternalID, nil
@@ -39,7 +39,7 @@ func (c *AppExposerClient) GetAsyncData(ctx context.Context, externalID string) 
 	u := c.baseURL.JoinPath("vice", "async-data")
 	u.RawQuery = url.Values{"external-id": {externalID}}.Encode()
 	var data AsyncData
-	if err := doJSON(ctx, c.httpClient, http.MethodGet, u, nil, "app-exposer", &data); err != nil {
+	if err := doJSON(ctx, c.httpClient, c.logger, http.MethodGet, u, nil, "app-exposer", &data); err != nil {
 		return nil, err
 	}
 	return &data, nil
@@ -48,19 +48,19 @@ func (c *AppExposerClient) GetAsyncData(ctx context.Context, externalID string) 
 // SaveAndExit saves outputs and terminates the analysis.
 func (c *AppExposerClient) SaveAndExit(ctx context.Context, analysisID string) error {
 	u := c.baseURL.JoinPath("vice", "admin", "analyses", analysisID, "save-and-exit")
-	return doJSON(ctx, c.httpClient, http.MethodPost, u, nil, "app-exposer", nil)
+	return doJSON(ctx, c.httpClient, c.logger, http.MethodPost, u, nil, "app-exposer", nil)
 }
 
 // ExitWithoutSave terminates the analysis without saving outputs.
 func (c *AppExposerClient) ExitWithoutSave(ctx context.Context, analysisID string) error {
 	u := c.baseURL.JoinPath("vice", "admin", "analyses", analysisID, "exit")
-	return doJSON(ctx, c.httpClient, http.MethodPost, u, nil, "app-exposer", nil)
+	return doJSON(ctx, c.httpClient, c.logger, http.MethodPost, u, nil, "app-exposer", nil)
 }
 
 // ExtendTimeLimit extends the analysis time limit.
 func (c *AppExposerClient) ExtendTimeLimit(ctx context.Context, analysisID string) error {
 	u := c.baseURL.JoinPath("vice", "admin", "analyses", analysisID, "time-limit")
-	return doJSON(ctx, c.httpClient, http.MethodPost, u, nil, "app-exposer", nil)
+	return doJSON(ctx, c.httpClient, c.logger, http.MethodPost, u, nil, "app-exposer", nil)
 }
 
 // CheckURLReady asks app-exposer whether the analysis URL is ready for access.
@@ -70,7 +70,7 @@ func (c *AppExposerClient) CheckURLReady(ctx context.Context, host, username str
 	var resp struct {
 		Ready bool `json:"ready"`
 	}
-	if err := doJSON(ctx, c.httpClient, http.MethodGet, u, nil, "app-exposer", &resp); err != nil {
+	if err := doJSON(ctx, c.httpClient, c.logger, http.MethodGet, u, nil, "app-exposer", &resp); err != nil {
 		return false, err
 	}
 	return resp.Ready, nil

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/cyverse-de/formation/internal/apperr"
 )
@@ -31,7 +32,7 @@ func (c *AppsClient) GetApp(ctx context.Context, systemID, appID, username strin
 	u := c.baseURL.JoinPath("apps", systemID, appID)
 	u.RawQuery = url.Values{"user": {username}}.Encode()
 	var app App
-	if err := doJSON(ctx, c.httpClient, http.MethodGet, u, nil, "apps", &app); err != nil {
+	if err := doJSON(ctx, c.httpClient, c.logger, http.MethodGet, u, nil, "apps", &app); err != nil {
 		return nil, err
 	}
 	return &app, nil
@@ -42,8 +43,8 @@ func (c *AppsClient) GetApp(ctx context.Context, systemID, appID, username strin
 func (c *AppsClient) ListApps(ctx context.Context, username string, limit, offset int, search string) (*AppList, error) {
 	q := url.Values{
 		"user":   {username},
-		"limit":  {fmt.Sprintf("%d", limit)},
-		"offset": {fmt.Sprintf("%d", offset)},
+		"limit":  {strconv.Itoa(limit)},
+		"offset": {strconv.Itoa(offset)},
 	}
 	if search != "" {
 		q.Set("search", search)
@@ -51,7 +52,7 @@ func (c *AppsClient) ListApps(ctx context.Context, username string, limit, offse
 	u := c.baseURL.JoinPath("apps")
 	u.RawQuery = q.Encode()
 	var list AppList
-	if err := doJSON(ctx, c.httpClient, http.MethodGet, u, nil, "apps", &list); err != nil {
+	if err := doJSON(ctx, c.httpClient, c.logger, http.MethodGet, u, nil, "apps", &list); err != nil {
 		return nil, err
 	}
 	return &list, nil
@@ -67,7 +68,7 @@ func (c *AppsClient) SubmitAnalysis(ctx context.Context, submission map[string]a
 		return nil, fmt.Errorf("encoding submission: %w", err)
 	}
 	var result SubmitResult
-	if err := doJSON(ctx, c.httpClient, http.MethodPost, u, body, "apps", &result); err != nil {
+	if err := doJSON(ctx, c.httpClient, c.logger, http.MethodPost, u, body, "apps", &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -112,7 +113,7 @@ func (c *AppsClient) queryAnalyses(ctx context.Context, username string, filters
 	u := c.baseURL.JoinPath("analyses")
 	u.RawQuery = q.Encode()
 	var list analysisList
-	if err := doJSON(ctx, c.httpClient, http.MethodGet, u, nil, "apps", &list); err != nil {
+	if err := doJSON(ctx, c.httpClient, c.logger, http.MethodGet, u, nil, "apps", &list); err != nil {
 		return nil, err
 	}
 	return &list, nil
@@ -121,7 +122,7 @@ func (c *AppsClient) queryAnalyses(ctx context.Context, username string, filters
 // doJSON performs an HTTP request and decodes a JSON response into out (when
 // non-nil). A non-2xx status yields a *StatusError; the body is read for
 // server-side diagnostics only.
-func doJSON(ctx context.Context, client *http.Client, method string, u *url.URL, body []byte, service string, out any) error {
+func doJSON(ctx context.Context, client *http.Client, logger *slog.Logger, method string, u *url.URL, body []byte, service string, out any) error {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -136,21 +137,40 @@ func doJSON(ctx context.Context, client *http.Client, method string, u *url.URL,
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		// Don't surface the raw error: it embeds the request URL (with the
+		// user query param) and internal hostnames. Log it server-side instead.
+		logf(logger, "downstream request failed", "service", service, "method", method, "error", err)
+		return fmt.Errorf("%s service request failed", service)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		logf(logger, "reading downstream response failed", "service", service, "error", err)
+		return fmt.Errorf("%s service request failed", service)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		logf(logger, "downstream returned error status", "service", service, "status", resp.StatusCode, "body", truncate(string(respBody), 512))
 		return &StatusError{Service: service, Code: resp.StatusCode, Body: string(respBody)}
 	}
 	if out != nil && len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, out); err != nil {
-			return fmt.Errorf("decoding %s response: %w", service, err)
+			logf(logger, "decoding downstream response failed", "service", service, "error", err)
+			return fmt.Errorf("%s service returned an unreadable response", service)
 		}
 	}
 	return nil
+}
+
+func logf(logger *slog.Logger, msg string, args ...any) {
+	if logger != nil {
+		logger.Error(msg, args...)
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }

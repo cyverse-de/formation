@@ -9,8 +9,8 @@ import (
 	"github.com/cyverse-de/formation/internal/apps"
 )
 
-func (d *Deps) listApps(ctx context.Context, _ *mcp.CallToolRequest, in ListAppsIn) (*mcp.CallToolResult, ListAppsOut, error) {
-	id, err := caller(ctx)
+func (d *Deps) listApps(ctx context.Context, req *mcp.CallToolRequest, in ListAppsIn) (*mcp.CallToolResult, ListAppsOut, error) {
+	id, err := caller(ctx, req)
 	if err != nil {
 		return nil, ListAppsOut{}, err
 	}
@@ -64,8 +64,8 @@ func (d *Deps) listApps(ctx context.Context, _ *mcp.CallToolRequest, in ListApps
 	return nil, out, nil
 }
 
-func (d *Deps) getAppParameters(ctx context.Context, _ *mcp.CallToolRequest, in GetAppParametersIn) (*mcp.CallToolResult, GetAppParametersOut, error) {
-	id, err := caller(ctx)
+func (d *Deps) getAppParameters(ctx context.Context, req *mcp.CallToolRequest, in GetAppParametersIn) (*mcp.CallToolResult, GetAppParametersOut, error) {
+	id, err := caller(ctx, req)
 	if err != nil {
 		return nil, GetAppParametersOut{}, err
 	}
@@ -79,8 +79,8 @@ func (d *Deps) getAppParameters(ctx context.Context, _ *mcp.CallToolRequest, in 
 	return nil, GetAppParametersOut{Groups: app.Groups, OverallJobType: app.OverallJobType}, nil
 }
 
-func (d *Deps) launchAppAndWait(ctx context.Context, _ *mcp.CallToolRequest, in LaunchAppIn) (*mcp.CallToolResult, LaunchAppOut, error) {
-	id, err := caller(ctx)
+func (d *Deps) launchAppAndWait(ctx context.Context, req *mcp.CallToolRequest, in LaunchAppIn) (*mcp.CallToolResult, LaunchAppOut, error) {
+	id, err := caller(ctx, req)
 	if err != nil {
 		return nil, LaunchAppOut{}, err
 	}
@@ -93,12 +93,19 @@ func (d *Deps) launchAppAndWait(ctx context.Context, _ *mcp.CallToolRequest, in 
 		outputZone = d.OutputZone
 	}
 
+	// Service-account tokens carry a non-routable keycloak email; fall back to
+	// the mapped user's address (username+suffix) for them.
+	jwtEmail := id.Email
+	if id.IsServiceAccount {
+		jwtEmail = ""
+	}
+
 	sub, email, err := d.Apps.PrepareSubmission(ctx, apps.PrepareInput{
 		Submission: in.Submission,
 		SystemID:   in.SystemID,
 		AppID:      in.AppID,
 		Username:   id.DownstreamUsername,
-		JWTEmail:   id.Email,
+		JWTEmail:   jwtEmail,
 		OutputZone: outputZone,
 		UserSuffix: d.UserSuffix,
 		Now:        d.Now(),
@@ -132,8 +139,8 @@ func (d *Deps) launchAppAndWait(ctx context.Context, _ *mcp.CallToolRequest, in 
 	return nil, out, nil
 }
 
-func (d *Deps) getAnalysisStatus(ctx context.Context, _ *mcp.CallToolRequest, in AnalysisStatusIn) (*mcp.CallToolResult, AnalysisStatusOut, error) {
-	id, err := caller(ctx)
+func (d *Deps) getAnalysisStatus(ctx context.Context, req *mcp.CallToolRequest, in AnalysisStatusIn) (*mcp.CallToolResult, AnalysisStatusOut, error) {
+	id, err := caller(ctx, req)
 	if err != nil {
 		return nil, AnalysisStatusOut{}, err
 	}
@@ -161,8 +168,8 @@ func (d *Deps) getAnalysisStatus(ctx context.Context, _ *mcp.CallToolRequest, in
 	return nil, out, nil
 }
 
-func (d *Deps) listRunningAnalyses(ctx context.Context, _ *mcp.CallToolRequest, in ListRunningAnalysesIn) (*mcp.CallToolResult, ListRunningAnalysesOut, error) {
-	id, err := caller(ctx)
+func (d *Deps) listRunningAnalyses(ctx context.Context, req *mcp.CallToolRequest, in ListRunningAnalysesIn) (*mcp.CallToolResult, ListRunningAnalysesOut, error) {
+	id, err := caller(ctx, req)
 	if err != nil {
 		return nil, ListRunningAnalysesOut{}, err
 	}
@@ -187,8 +194,8 @@ func (d *Deps) listRunningAnalyses(ctx context.Context, _ *mcp.CallToolRequest, 
 	return nil, out, nil
 }
 
-func (d *Deps) stopAnalysis(ctx context.Context, _ *mcp.CallToolRequest, in StopAnalysisIn) (*mcp.CallToolResult, StopAnalysisOut, error) {
-	if _, err := caller(ctx); err != nil {
+func (d *Deps) stopAnalysis(ctx context.Context, req *mcp.CallToolRequest, in StopAnalysisIn) (*mcp.CallToolResult, StopAnalysisOut, error) {
+	if _, err := caller(ctx, req); err != nil {
 		return nil, StopAnalysisOut{}, err
 	}
 	if err := validateUUID(in.AnalysisID, "analysis_id"); err != nil {
@@ -219,8 +226,8 @@ func (d *Deps) stopAnalysis(ctx context.Context, _ *mcp.CallToolRequest, in Stop
 	return nil, out, nil
 }
 
-func (d *Deps) openInBrowser(ctx context.Context, _ *mcp.CallToolRequest, in OpenInBrowserIn) (*mcp.CallToolResult, OpenInBrowserOut, error) {
-	if _, err := caller(ctx); err != nil {
+func (d *Deps) openInBrowser(ctx context.Context, req *mcp.CallToolRequest, in OpenInBrowserIn) (*mcp.CallToolResult, OpenInBrowserOut, error) {
+	if _, err := caller(ctx, req); err != nil {
 		return nil, OpenInBrowserOut{}, err
 	}
 	if err := validateUUID(in.AnalysisID, "analysis_id"); err != nil {

@@ -136,7 +136,7 @@ func parseDateFilter(expr string) (string, time.Time, error) {
 // parseISODate parses common ISO 8601 forms into a UTC time.
 func parseISODate(s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
-	layouts := []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"}
+	layouts := []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02"}
 	for _, layout := range layouts {
 		if t, err := time.Parse(layout, s); err == nil {
 			return t.UTC(), nil

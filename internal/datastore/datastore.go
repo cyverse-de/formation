@@ -202,16 +202,21 @@ func (d *DataStore) UploadFile(username, p string, content []byte, metadata []AV
 	}
 	defer release()
 
-	exists := fsys.Exists(p)
-	if exists && fsys.ExistsDir(p) {
-		return nil, apperr.BadRequest("Cannot upload file - path is a directory")
-	}
-	if !exists {
+	entry, statErr := fsys.Stat(p)
+	switch {
+	case statErr == nil:
+		if entry.IsDir() {
+			return nil, apperr.BadRequest("Cannot upload file - path is a directory")
+		}
+	case types.IsFileNotFoundError(statErr):
 		parent := path.Dir(p)
 		if !fsys.Exists(parent) {
 			return nil, apperr.NotFound("Parent directory", parent)
 		}
+	default:
+		return nil, d.classify("stat", p, statErr)
 	}
+	exists := statErr == nil
 
 	if err := d.writeFile(fsys, p, content); err != nil {
 		return nil, err
@@ -246,11 +251,15 @@ func (d *DataStore) SetMetadata(username, p string, metadata []AVU, replace bool
 	}
 	defer release()
 
-	if !fsys.Exists(p) {
-		return nil, apperr.NotFound("Path", p)
+	entry, statErr := fsys.Stat(p)
+	if statErr != nil {
+		if types.IsFileNotFoundError(statErr) {
+			return nil, apperr.NotFound("Path", p)
+		}
+		return nil, d.classify("stat", p, statErr)
 	}
 	t := typeDataObject
-	if fsys.ExistsDir(p) {
+	if entry.IsDir() {
 		t = typeCollection
 	}
 	if err := d.applyMetadata(fsys, p, metadata, replace); err != nil {
@@ -268,10 +277,14 @@ func (d *DataStore) Delete(username, p string, recurse, dryRun bool) (*DeleteRes
 	}
 	defer release()
 
-	if !fsys.Exists(p) {
-		return nil, apperr.NotFound("Path", p)
+	entry, statErr := fsys.Stat(p)
+	if statErr != nil {
+		if types.IsFileNotFoundError(statErr) {
+			return nil, apperr.NotFound("Path", p)
+		}
+		return nil, d.classify("stat", p, statErr)
 	}
-	if fsys.ExistsFile(p) {
+	if !entry.IsDir() {
 		return d.deleteFile(fsys, p, dryRun)
 	}
 	return d.deleteDir(fsys, p, recurse, dryRun)
@@ -296,7 +309,9 @@ func (d *DataStore) deleteDir(fsys *fs.FileSystem, p string, recurse, dryRun boo
 	}
 	itemCount := len(entries)
 
-	if !recurse && !dryRun && itemCount > 0 {
+	// Apply the non-empty guard to dry-runs too, so the preview matches what the
+	// real delete would do.
+	if !recurse && itemCount > 0 {
 		return nil, apperr.BadRequest("Directory not empty. Use recurse=true to delete non-empty directories.")
 	}
 
@@ -405,9 +420,12 @@ func entryType(e *fs.Entry) string {
 	return typeDataObject
 }
 
+// normalizePath ensures an absolute, cleaned iRODS path: it resolves "..", ".",
+// and redundant separators so client-supplied paths cannot express traversal,
+// in addition to iRODS's own ACL enforcement.
 func normalizePath(p string) string {
 	if !strings.HasPrefix(p, "/") {
-		return "/" + p
+		p = "/" + p
 	}
-	return p
+	return path.Clean(p)
 }

@@ -38,16 +38,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
+	// Backend (apps/app-exposer) traffic always verifies TLS. KEYCLOAK_SSL_VERIFY
+	// only loosens the Keycloak client, so a Keycloak-scoped flag can never
+	// weaken TLS for the DE service calls.
+	backendClient := &http.Client{Timeout: cfg.HTTPTimeout}
+	keycloakClient := &http.Client{Timeout: cfg.HTTPTimeout}
 	if !cfg.KeycloakSSLVerify {
-		httpClient.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // explicitly configured for non-prod
+		keycloakClient.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // explicitly configured for non-prod
 		logger.Warn("Keycloak TLS verification disabled (KEYCLOAK_SSL_VERIFY=false); do not use in production")
 	}
 
-	deps := buildDeps(cfg, httpClient, logger)
+	deps := buildDeps(cfg, backendClient, logger)
 	srv := mcpserver.New(deps)
 
-	handler := buildHandler(cfg, httpClient, srv, logger)
+	handler := buildHandler(cfg, keycloakClient, srv, logger)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -58,9 +62,7 @@ func main() {
 	run(httpSrv, deps, logger)
 }
 
-// buildDeps constructs the backend clients and tool dependencies. The data
-// store is best-effort: if iRODS is unreachable at startup, data tools report
-// the service as unavailable rather than preventing the server from booting.
+// buildDeps constructs the backend clients and tool dependencies.
 func buildDeps(cfg *config.Config, httpClient *http.Client, logger *slog.Logger) *mcpserver.Deps {
 	appsClient := apps.NewAppsClient(httpClient, cfg.AppsBaseURL, logger)
 	exposerClient := apps.NewAppExposerClient(httpClient, cfg.AppExposerBaseURL, logger)

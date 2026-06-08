@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/cyverse-de/formation/internal/apperr"
 	"github.com/cyverse-de/formation/internal/apps"
 	"github.com/cyverse-de/formation/internal/authz"
@@ -301,5 +304,32 @@ func TestUnauthenticatedRejected(t *testing.T) {
 	d.Apps = &fakeApps{}
 	if _, _, err := d.listApps(context.Background(), nil, ListAppsIn{}); err == nil {
 		t.Error("expected unauthenticated error without identity in context")
+	}
+}
+
+// TestIdentityFromRequestExtra verifies the handler reads the per-call identity
+// from RequestExtra.TokenInfo (the canonical SDK path), independent of context.
+func TestIdentityFromRequestExtra(t *testing.T) {
+	d := newDeps()
+	fa := &fakeApps{}
+	d.Apps = fa
+
+	req := &mcp.CallToolRequest{Extra: &mcp.RequestExtra{
+		TokenInfo: &auth.TokenInfo{
+			UserID: "bob",
+			Extra:  map[string]any{"identity": authz.Identity{DownstreamUsername: "bob"}},
+		},
+	}}
+
+	// Empty context (no ContextWithIdentity): identity must come from req.
+	// launchAppAndWait records the username passed downstream.
+	fa.preparedSub = map[string]any{"name": "x"}
+	fa.submitResult = &apps.SubmitResult{ID: validUUID, Name: "x", Status: "Submitted"}
+	d.Vice = &fakeVice{}
+	if _, _, err := d.launchAppAndWait(context.Background(), req, LaunchAppIn{SystemID: "de", AppID: validUUID}); err != nil {
+		t.Fatalf("launch with request identity: %v", err)
+	}
+	if fa.gotUsername != "bob" {
+		t.Errorf("downstream username = %q, want bob (from request token)", fa.gotUsername)
 	}
 }

@@ -31,9 +31,8 @@ type Config struct {
 	KeycloakSSLVerify    bool
 
 	// Downstream services
-	AppsBaseURL        *url.URL
-	AppExposerBaseURL  *url.URL
-	PermissionsBaseURL *url.URL
+	AppsBaseURL       *url.URL
+	AppExposerBaseURL *url.URL
 
 	// Application behavior
 	UserSuffix string
@@ -79,9 +78,8 @@ type jsonConfig struct {
 		SSLVerify    *bool  `json:"ssl_verify"`
 	} `json:"keycloak"`
 	Services struct {
-		AppsBaseURL        string `json:"apps_base_url"`
-		AppExposerBaseURL  string `json:"app_exposer_base_url"`
-		PermissionsBaseURL string `json:"permissions_base_url"`
+		AppsBaseURL       string `json:"apps_base_url"`
+		AppExposerBaseURL string `json:"app_exposer_base_url"`
 	} `json:"services"`
 	Application struct {
 		UserSuffix              string            `json:"user_suffix"`
@@ -147,9 +145,6 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.AppExposerBaseURL, err = parseURL(strValue("APP_EXPOSER_BASE_URL", jc.Services.AppExposerBaseURL, "http://app-exposer")); err != nil {
-		return nil, err
-	}
-	if c.PermissionsBaseURL, err = parseURL(strValue("PERMISSIONS_BASE_URL", jc.Services.PermissionsBaseURL, "http://permissions")); err != nil {
 		return nil, err
 	}
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -126,13 +127,17 @@ func (v *Verifier) deriveIdentity(c claims) (Identity, error) {
 }
 
 // idTokenVerifier lazily initializes (and caches) the OIDC verifier for the
-// configured realm issuer.
+// configured realm issuer. OIDC discovery (a network call) is performed without
+// holding the lock so concurrent callers are not serialized, and a transient
+// failure is not cached.
 func (v *Verifier) idTokenVerifier(ctx context.Context) (*oidc.IDTokenVerifier, error) {
 	v.mu.Lock()
-	defer v.mu.Unlock()
-	if v.verifier != nil {
-		return v.verifier, nil
+	cached := v.verifier
+	v.mu.Unlock()
+	if cached != nil {
+		return cached, nil
 	}
+
 	provider, err := oidc.NewProvider(oidc.ClientContext(ctx, v.httpClient), v.cfg.KeycloakIssuer())
 	if err != nil {
 		return nil, err
@@ -140,11 +145,17 @@ func (v *Verifier) idTokenVerifier(ctx context.Context) (*oidc.IDTokenVerifier, 
 	// SkipClientIDCheck mirrors the Python verify_aud=False: Keycloak access
 	// tokens carry varying audiences, so only signature, issuer, and expiry
 	// are enforced.
-	v.verifier = provider.Verifier(&oidc.Config{SkipClientIDCheck: true})
-	return v.verifier, nil
+	verifier := provider.Verifier(&oidc.Config{SkipClientIDCheck: true})
+
+	v.mu.Lock()
+	if v.verifier == nil {
+		v.verifier = verifier
+	}
+	cached = v.verifier
+	v.mu.Unlock()
+	return cached, nil
 }
 
 func isServiceAccountUsername(preferredUsername string) bool {
-	return len(preferredUsername) >= len(serviceAccountPrefix) &&
-		preferredUsername[:len(serviceAccountPrefix)] == serviceAccountPrefix
+	return strings.HasPrefix(preferredUsername, serviceAccountPrefix)
 }
