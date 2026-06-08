@@ -1,11 +1,12 @@
 // Package datastore wraps the CyVerse Go iRODS client to provide the
 // file-and-metadata operations Formation exposes as MCP tools.
 //
-// Each operation connects to iRODS using proxy (impersonation) auth: the
-// service account authenticates as the proxy user while the connection's client
-// user is the authenticated caller, so iRODS enforces permissions natively as
-// that user and files are owned by them. A fresh connection is opened per
-// operation and released when it completes.
+// Operations use proxy (impersonation) auth: the service account authenticates
+// as the proxy user while the connection's client user is the authenticated
+// caller, so iRODS enforces permissions natively as that user and files are
+// owned by them. Connections are cached per user (see pool) and reused across
+// that user's requests, keyed by the validated downstream username so one
+// user's connection can never be handed to another.
 package datastore
 
 import (
@@ -15,6 +16,7 @@ import (
 	"log/slog"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/cyverse/go-irodsclient/fs"
 	"github.com/cyverse/go-irodsclient/irods/common"
@@ -24,14 +26,10 @@ import (
 )
 
 // DataStore performs iRODS operations on behalf of authenticated users via
-// proxy impersonation.
+// proxy impersonation, reusing a per-user connection from a pool.
 type DataStore struct {
-	host      string
-	port      int
-	proxyUser string
-	password  string
-	zone      string
-	logger    *slog.Logger
+	pool   *pool
+	logger *slog.Logger
 }
 
 // Config holds the iRODS connection parameters. User is the proxy (service)
@@ -84,46 +82,26 @@ const (
 	typeDataObject = "data_object"
 )
 
-// New returns a DataStore. It does not open a connection; connections are
-// established per operation against the impersonated caller.
-func New(cfg Config, logger *slog.Logger) *DataStore {
-	return &DataStore{
-		host:      cfg.Host,
-		port:      cfg.Port,
-		proxyUser: cfg.User,
-		password:  cfg.Password,
-		zone:      cfg.Zone,
-		logger:    logger,
-	}
+// New returns a DataStore backed by a per-user connection pool. idleTTL bounds
+// how long an idle, unreferenced connection is kept before being closed. Call
+// Close to release all connections and stop the pool.
+func New(cfg Config, idleTTL time.Duration, logger *slog.Logger) *DataStore {
+	return &DataStore{pool: newPool(cfg, idleTTL), logger: logger}
 }
 
-// connect opens an iRODS connection that authenticates as the proxy user but
-// acts as the given client user. The caller must Release the result.
-func (d *DataStore) connect(username string) (*fs.FileSystem, error) {
-	account, err := types.CreateIRODSProxyAccount(
-		d.host, d.port,
-		username, d.zone, // client user / zone
-		d.proxyUser, d.zone, // proxy user / zone
-		types.AuthSchemeNative, d.password, "",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("data store: invalid account: %w", err)
-	}
-	filesystem, err := fs.NewFileSystemWithDefault(account, "formation")
-	if err != nil {
-		return nil, d.classify("connect", username, err)
-	}
-	return filesystem, nil
+// Close releases all pooled iRODS connections and stops the pool janitor.
+func (d *DataStore) Close() {
+	d.pool.close()
 }
 
 // Browse lists a directory or reads a file at the path, as the caller.
 func (d *DataStore) Browse(username, p string, offset, limit int, includeMetadata bool, avuDelimiter string) (*BrowseResult, error) {
 	p = normalizePath(p)
-	fsys, err := d.connect(username)
+	fsys, release, err := d.pool.acquire(username)
 	if err != nil {
-		return nil, err
+		return nil, d.classify("connect", username, err)
 	}
-	defer fsys.Release()
+	defer release()
 
 	entry, err := fsys.Stat(p)
 	if err != nil {
@@ -189,11 +167,11 @@ func (d *DataStore) listDir(fsys *fs.FileSystem, p string, includeMetadata bool,
 // CreateDirectory creates a collection (or sets metadata on an existing one).
 func (d *DataStore) CreateDirectory(username, p string, metadata []AVU) (*WriteResult, error) {
 	p = normalizePath(p)
-	fsys, err := d.connect(username)
+	fsys, release, err := d.pool.acquire(username)
 	if err != nil {
-		return nil, err
+		return nil, d.classify("connect", username, err)
 	}
-	defer fsys.Release()
+	defer release()
 
 	if fsys.Exists(p) {
 		if err := d.applyMetadata(fsys, p, metadata, false); err != nil {
@@ -218,11 +196,11 @@ func (d *DataStore) CreateDirectory(username, p string, metadata []AVU) (*WriteR
 // UploadFile creates or overwrites a data object with the given content.
 func (d *DataStore) UploadFile(username, p string, content []byte, metadata []AVU, replaceMetadata bool) (*WriteResult, error) {
 	p = normalizePath(p)
-	fsys, err := d.connect(username)
+	fsys, release, err := d.pool.acquire(username)
 	if err != nil {
-		return nil, err
+		return nil, d.classify("connect", username, err)
 	}
-	defer fsys.Release()
+	defer release()
 
 	exists := fsys.Exists(p)
 	if exists && fsys.ExistsDir(p) {
@@ -262,11 +240,11 @@ func (d *DataStore) writeFile(fsys *fs.FileSystem, p string, content []byte) err
 // SetMetadata sets (optionally replacing) AVU metadata on an existing path.
 func (d *DataStore) SetMetadata(username, p string, metadata []AVU, replace bool) (*WriteResult, error) {
 	p = normalizePath(p)
-	fsys, err := d.connect(username)
+	fsys, release, err := d.pool.acquire(username)
 	if err != nil {
-		return nil, err
+		return nil, d.classify("connect", username, err)
 	}
-	defer fsys.Release()
+	defer release()
 
 	if !fsys.Exists(p) {
 		return nil, apperr.NotFound("Path", p)
@@ -284,11 +262,11 @@ func (d *DataStore) SetMetadata(username, p string, metadata []AVU, replace bool
 // Delete removes a file or directory, supporting dry-run and recursive deletion.
 func (d *DataStore) Delete(username, p string, recurse, dryRun bool) (*DeleteResult, error) {
 	p = normalizePath(p)
-	fsys, err := d.connect(username)
+	fsys, release, err := d.pool.acquire(username)
 	if err != nil {
-		return nil, err
+		return nil, d.classify("connect", username, err)
 	}
-	defer fsys.Release()
+	defer release()
 
 	if !fsys.Exists(p) {
 		return nil, apperr.NotFound("Path", p)

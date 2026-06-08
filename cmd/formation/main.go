@@ -55,7 +55,7 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	run(httpSrv, logger)
+	run(httpSrv, deps, logger)
 }
 
 // buildDeps constructs the backend clients and tool dependencies. The data
@@ -71,15 +71,15 @@ func buildDeps(cfg *config.Config, httpClient *http.Client, logger *slog.Logger)
 		URLCheckCacheTTL: cfg.ViceURLCheckCacheTTL,
 	}, logger)
 
-	// The data store connects per request using proxy impersonation, so there
-	// is no startup connection to establish here.
+	// The data store connects lazily via proxy impersonation, pooling one
+	// connection per user; nothing is established at startup.
 	ds := datastore.New(datastore.Config{
 		Host:     cfg.IRODSHost,
 		Port:     cfg.IRODSPort,
 		User:     cfg.IRODSUser,
 		Password: cfg.IRODSPassword,
 		Zone:     cfg.IRODSZone,
-	}, logger)
+	}, cfg.IRODSConnIdleTTL, logger)
 
 	return &mcpserver.Deps{
 		Apps:       appsClient,
@@ -119,7 +119,7 @@ func buildHandler(cfg *config.Config, httpClient *http.Client, srv *mcp.Server, 
 	return prefixed
 }
 
-func run(httpSrv *http.Server, logger *slog.Logger) {
+func run(httpSrv *http.Server, deps *mcpserver.Deps, logger *slog.Logger) {
 	idleClosed := make(chan struct{})
 	go func() {
 		sig := make(chan os.Signal, 1)
@@ -130,6 +130,9 @@ func run(httpSrv *http.Server, logger *slog.Logger) {
 		defer cancel()
 		if err := httpSrv.Shutdown(ctx); err != nil {
 			logger.Error("graceful shutdown failed", "error", err)
+		}
+		if ds, ok := deps.Data.(*datastore.DataStore); ok {
+			ds.Close()
 		}
 		close(idleClosed)
 	}()
