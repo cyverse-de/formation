@@ -103,8 +103,15 @@ PUBLIC_BASE_URL=https://de.cyverse.org/formation   # advertised in OAuth metadat
 SERVICE_ACCOUNTS_ONLY=false
 SERVICE_ACCOUNT_USERNAMES='{"app-runner":"de-service-account"}'
 
+# VICE URL readiness probe (seconds, except retries)
+VICE_URL_CHECK_TIMEOUT=5
+VICE_URL_CHECK_RETRIES=3
+VICE_URL_CHECK_CACHE_TTL=5
+
 # Server
 LISTEN_ADDR=:8080
+HTTP_TIMEOUT=30                                     # seconds, for downstream calls
+CONFIG_FILE=config.json                            # optional JSON config path
 ```
 
 Secrets (`KEYCLOAK_CLIENT_SECRET`, `IRODS_PASSWORD`) should be supplied via the
