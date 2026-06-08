@@ -22,6 +22,7 @@
     "user_suffix": "@iplantcollaborative.org",
     "vice_domain": ".cyverse.run",
     "path_prefix": "/formation",
+    "public_base_url": "https://de.cyverse.org/formation",
     "vice_url_check_timeout": 5.0,
     "vice_url_check_retries": 3,
     "vice_url_check_cache_ttl": 5.0,

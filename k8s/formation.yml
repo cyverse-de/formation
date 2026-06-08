@@ -49,17 +49,17 @@ spec:
               value: "/etc/cyverse/formation/formation.json"
           ports:
             - name: listen-port
-              containerPort: 8000
+              containerPort: 8080
           livenessProbe:
             httpGet:
-              path: /docs
-              port: 8000
+              path: /
+              port: 8080
             initialDelaySeconds: 5
             periodSeconds: 5
           readinessProbe:
             httpGet:
-              path: /docs
-              port: 8000
+              path: /
+              port: 8080
             initialDelaySeconds: 5
             periodSeconds: 5
 ---

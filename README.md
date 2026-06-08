@@ -1,254 +1,137 @@
 # Formation
 
-Formation is a FastAPI-based service that provides authenticated access to iRODS data storage with integrated Keycloak authentication. It serves as a bridge between web applications and iRODS file systems, offering RESTful APIs for file browsing, content retrieval, and metadata access.
+Formation is an MCP (Model Context Protocol) server for the CyVerse Discovery
+Environment. It is an MCP-optimized alternative to the Terrain API: a thin,
+flat-JSON bridge over the DE's `apps` and `app-exposer` services and the iRODS
+data store, exposed as MCP tools for use by AI agents and automated tooling.
 
-## Features
+It is written in Go using the official
+[MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk) and serves tools
+over the **streamable HTTP** transport. It acts as an OAuth 2.0 resource server:
+it validates Keycloak bearer tokens and publishes
+[RFC 9728](https://datatracker.ietf.org/doc/rfc9728) protected-resource metadata
+so MCP clients can run the standard OIDC authorization-code flow against
+Keycloak. The legacy Keycloak password-grant login is preserved as a plain REST
+endpoint.
 
-- **Authentication**: Secure login via Keycloak OIDC with JWT token support
-- **Service Account Support**: Service-to-service authentication with enforced role-based access control (requires "app-runner" role)
-- **Interactive Apps**: List and filter VICE (Visual Interactive Computing Environment) applications accessible to authenticated users
-- **File System Access**: Browse iRODS collections and retrieve file contents
-- **Metadata Support**: Access iRODS AVU (Attribute-Value-Unit) metadata as HTTP headers
-- **Content Type Detection**: Automatic MIME type detection for file responses
-- **Asynchronous Operations**: Concurrent metadata retrieval and content type detection for improved performance
-- **Pagination**: Support for offset/limit parameters when reading large files
-- **Permission Checking**: Validates user read permissions before granting access
-- **Advanced Filtering**: Filter apps by name, description, integrator, and date ranges
+## Tools
+
+| Tool | Purpose |
+|------|---------|
+| `list_apps` | List DE apps available to the user, with filters (job type, name, description, integrator, date ranges). |
+| `get_app_parameters` | Get the parameter group definitions needed to launch an app. |
+| `launch_app_and_wait` | Launch an app and, for interactive apps, resolve and return its access URL. |
+| `get_analysis_status` | Get an analysis's status and, for interactive apps, whether its URL is ready. |
+| `list_running_analyses` | List the user's analyses filtered by status (default `Running`). |
+| `stop_analysis` | Control a running analysis: `save_and_exit`, `exit`, or `extend_time`. |
+| `open_in_browser` | Resolve the access URL for an interactive analysis. |
+| `browse_data` | List a directory or read a file in the iRODS data store. |
+| `create_directory` | Create a directory in the iRODS data store. |
+| `upload_file` | Create or overwrite a file in the iRODS data store. |
+| `delete_data` | Delete a file or directory (supports dry-run and recursive deletion). |
+| `set_metadata` | Set AVU metadata on an iRODS file or directory. |
+
+## Endpoints
+
+| Path | Description |
+|------|-------------|
+| `POST /mcp` | The MCP streamable-HTTP endpoint. Requires a Keycloak bearer token. |
+| `GET /.well-known/oauth-protected-resource` | OAuth 2.0 protected-resource metadata (RFC 9728). Public. |
+| `POST /login` | Legacy password-grant login (HTTP Basic). Returns Keycloak's token JSON. |
+| `GET /` | Unauthenticated health check. |
+
+All paths are served under `PATH_PREFIX` when one is configured.
+
+## Authentication
+
+Formation supports two complementary flows against the same Keycloak realm:
+
+- **OIDC authorization-code flow (recommended for MCP clients).** Formation is a
+  resource server. An unauthenticated request to `/mcp` returns `401` with a
+  `WWW-Authenticate` header pointing at the protected-resource metadata. The MCP
+  client discovers Keycloak from that metadata and runs the standard
+  authorization-code + PKCE flow itself, then calls `/mcp` with the resulting
+  bearer token. Formation never hosts an `/authorize` or callback endpoint.
+- **Password grant (legacy).** `POST /login` with HTTP Basic credentials
+  exchanges a username and password for a Keycloak token via the
+  resource-owner-password-credentials grant.
+
+Tokens are validated against the realm's JWKS (RS256, issuer-checked; audience
+is not enforced, matching the original service). **Service accounts** — Keycloak
+principals whose `preferred_username` begins with `service-account-` — must hold
+the `app-runner` realm role; that role maps to a configurable, sanitized
+downstream username used when calling backend services.
 
 ## Requirements
 
-- Python 3.13+
-- [uv](https://docs.astral.sh/uv/) - Fast Python package manager
-- iRODS server access
-- Keycloak server for authentication
-- PostgreSQL database
-
-### Development Requirements
-
-- [jq](https://jqlang.github.io/jq/) - Command-line JSON processor (for hooks)
-- [ruff](https://docs.astral.sh/ruff/) - Fast Python linter and formatter (installed via uv)
-
-## Installation
-
-This project uses [uv](https://docs.astral.sh/uv/) as the package manager for fast, reliable dependency management.
-
-### Installing uv
-
-```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Or using pip
-pip install uv
-```
-
-### Project Setup
-
-```bash
-# Install dependencies and create virtual environment
-uv sync
-
-# Activate virtual environment (optional - uv run handles this automatically)
-source .venv/bin/activate
-```
+- Go 1.25+
+- Access to the DE `apps` and `app-exposer` services
+- An iRODS server (for the data-store tools)
+- A Keycloak realm for authentication
 
 ## Configuration
 
-Formation is configured via a JSON configuration file. Copy `config.example.json` to `config.json` and edit as needed:
+Configuration is resolved with environment variables taking precedence over an
+optional JSON file (`CONFIG_FILE`, default `config.json`); see
+`config.example.json`. Key variables:
 
 ```bash
-cp config.example.json config.json
+# iRODS
+IRODS_HOST=data.cyverse.org
+IRODS_PORT=1247
+IRODS_USER=service-account
+IRODS_PASSWORD=secret
+IRODS_ZONE=iplant
+
+# Keycloak
+KEYCLOAK_SERVER_URL=https://auth.example.com
+KEYCLOAK_REALM=CyVerse
+KEYCLOAK_CLIENT_ID=formation
+KEYCLOAK_CLIENT_SECRET=secret
+KEYCLOAK_SSL_VERIFY=true
+
+# Backend services
+APPS_BASE_URL=http://apps:8080
+APP_EXPOSER_BASE_URL=http://app-exposer:8080
+PERMISSIONS_BASE_URL=http://permissions:8080
+
+# Application
+USER_SUFFIX=@iplantcollaborative.org
+VICE_DOMAIN=.cyverse.run
+PATH_PREFIX=/formation
+PUBLIC_BASE_URL=https://de.cyverse.org/formation   # advertised in OAuth metadata
+SERVICE_ACCOUNTS_ONLY=false
+SERVICE_ACCOUNT_USERNAMES='{"app-runner":"de-service-account"}'
+
+# Server
+LISTEN_ADDR=:8080
 ```
 
-### Configuration File Structure
+Secrets (`KEYCLOAK_CLIENT_SECRET`, `IRODS_PASSWORD`) should be supplied via the
+environment or the JSON config secret, not via CLI flags.
 
-```json
-{
-  "irods": {
-    "host": "irods.example.com",
-    "port": "1247",
-    "user": "rods",
-    "password": "changeme",
-    "zone": "iplant"
-  },
-  "keycloak": {
-    "server_url": "https://keycloak.example.com",
-    "realm": "cyverse",
-    "client_id": "formation",
-    "client_secret": "changeme",
-    "ssl_verify": true
-  },
-  "services": {
-    "apps_base_url": "http://apps:8080",
-    "app_exposer_base_url": "http://app-exposer:8080",
-    "permissions_base_url": "http://permissions:8080"
-  },
-  "application": {
-    "user_suffix": "@iplantcollaborative.org",
-    "vice_domain": ".cyverse.run",
-    "path_prefix": "/formation",
-    "vice_url_check_timeout": 5.0,
-    "vice_url_check_retries": 3,
-    "vice_url_check_cache_ttl": 5.0,
-    "service_accounts_only": false,
-    "service_account_usernames": {
-      "app-runner": "de-service-account"
-    }
-  }
-}
-```
-
-### Configuration Sections
-
-**irods**: iRODS server connection settings
-- `host`: iRODS server hostname
-- `port`: iRODS server port
-- `user`: iRODS username for service account
-- `password`: iRODS password
-- `zone`: iRODS zone name
-
-**keycloak**: Keycloak authentication settings
-- `server_url`: Keycloak server URL
-- `realm`: Keycloak realm name
-- `client_id`: OAuth2 client ID
-- `client_secret`: OAuth2 client secret
-- `ssl_verify`: Enable SSL verification (default: true)
-
-**services**: Backend service URLs
-- `apps_base_url`: Base URL of apps service
-- `app_exposer_base_url`: Base URL of app-exposer service
-- `permissions_base_url`: Base URL of permissions service
-
-**application**: Application behavior settings
-- `user_suffix`: Username suffix to strip from integrator usernames
-- `vice_domain`: Domain suffix for VICE applications
-- `path_prefix`: URL path prefix for the service
-- `vice_url_check_timeout`: Timeout for VICE URL checks in seconds
-- `vice_url_check_retries`: Number of retries for VICE URL checks
-- `vice_url_check_cache_ttl`: Cache TTL for VICE URL check results in seconds
-- `service_accounts_only`: When true, disables regular user authentication and only accepts service account authentication (useful for testing)
-- `service_account_usernames`: Map of service account role names to usernames used when calling backend services
-
-## Usage
-
-### Starting the Server
+## Building and running
 
 ```bash
-# Development mode with auto-reload (recommended for local development)
-uv run fastapi dev main.py
+# Run locally (reads config from the environment / config.json)
+go run ./cmd/formation
 
-# Production mode
-uv run fastapi run main.py
+# Build a binary
+go build -o formation ./cmd/formation
 
-# Custom host and port
-uv run fastapi dev main.py --host 0.0.0.0 --port 8080
-
-# Alternative: activate venv manually then run
-source .venv/bin/activate
-fastapi dev main.py
+# Build the container image (uses build.sh -> Dockerfile)
+./build.sh -i harbor.cyverse.org/de/formation -t v1.0.0
 ```
-
-### API Endpoints
-
-See [API Endpoints Documentation](docs/API_ENDPOINTS.md) for detailed endpoint documentation including:
-- Authentication (login, service accounts)
-- Interactive Applications (`/apps`)
-- File System Operations (`/data/browse`)
-- Response formats
 
 ## Development
 
-### Prerequisites
-
-Development tools required:
-
 ```bash
-# Install jq (for automated hooks)
-# macOS
-brew install jq
-
-# Ubuntu/Debian
-sudo apt-get install jq
-
-# Fedora/RHEL
-sudo dnf install jq
-
-# Ruff is automatically installed via uv sync
-# but can also be installed globally:
-uv tool install ruff
+go build ./...        # compile
+go vet ./...          # vet
+golangci-lint run     # lint
+go test ./...         # unit tests
 ```
 
-### Code Style
-
-The project uses [ruff](https://docs.astral.sh/ruff/) for linting and formatting:
-
-```bash
-# Format and lint code
-uv run ruff format
-uv run ruff check --fix
-
-# Check for issues without fixing
-uv run ruff check
-
-# Format specific files
-uv run ruff check --fix routes/apps.py
-```
-
-### Automated Linting (Optional)
-
-For automatic linting after file edits, see `.claude/hooks-example.md` for Claude Code hook configuration. This requires `jq` to be installed.
-
-### Working with uv
-
-```bash
-# Add new dependencies
-uv add package-name
-
-# Add development dependencies
-uv add --dev package-name
-
-# Update dependencies
-uv sync --upgrade
-
-# Run scripts with uv (automatically handles virtual environment)
-uv run python main.py
-uv run pytest
-```
-
-### Testing
-
-```bash
-# Run all tests
-uv run pytest
-
-# Run specific test file
-uv run pytest tests/test_interactive_apps.py
-
-# Run with verbose output
-uv run pytest -v
-
-# Run with coverage
-uv run pytest --cov=. --cov-report=html
-```
-
-See [Testing Documentation](docs/TESTING.md) for comprehensive testing information.
-
-## Documentation
-
-- [API Endpoints](docs/API_ENDPOINTS.md) - Complete API endpoint reference
-- [Interactive Apps Endpoint](docs/INTERACTIVE_APPS_ENDPOINT.md) - Detailed documentation for the `/apps` endpoint
-- [Date Filtering](docs/DATE_FILTERING.md) - Date filter syntax and usage examples
-- [Implementation Status](docs/IMPLEMENTATION_STATUS.md) - Current implementation status and roadmap
-- [Testing Guide](docs/TESTING.md) - Testing approach and guidelines
-
-## API Documentation
-
-Interactive API documentation is available when the server is running:
-
-- **Swagger UI**: `http://localhost:8000/docs`
-- **ReDoc**: `http://localhost:8000/redoc`
-
-The API documentation is organized into three main categories:
-- **Authentication** - User authentication and session management
-- **Apps** - App discovery, job submission, and lifecycle management
-- **Data Store** - iRODS file system operations and metadata access
+Tests are table-driven and run against in-memory and `httptest` servers; the
+OIDC verifier is tested with a stub discovery/JWKS server and signed tokens. A
+live iRODS server is not required for the unit tests.

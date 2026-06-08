@@ -1,10 +1,12 @@
-# Date Filtering Implementation
+# Date Filtering
 
 ## Overview
 
-Added date filtering capabilities to the `/apps` endpoint, allowing users to filter interactive apps by `integration_date` and `edited_date` using comparison operators.
+The `list_apps` tool can filter apps by `integration_date` and `edited_date`
+using comparison operators, supplied as the tool's `integration_date` and
+`edited_date` inputs.
 
-## Query Parameters
+## Inputs
 
 ### `integration_date` (optional)
 Filter apps by their integration date with a comparison operator prefix.
