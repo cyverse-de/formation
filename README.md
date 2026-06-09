@@ -82,6 +82,8 @@ IRODS_PORT=1247
 IRODS_USER=service-account
 IRODS_PASSWORD=secret
 IRODS_ZONE=iplant
+IRODS_CONN_IDLE_TTL=600                             # seconds an idle pooled connection is kept
+IRODS_MAX_CONNS=100                                # max cached per-user connections (0 = unbounded)
 
 # Keycloak
 KEYCLOAK_SERVER_URL=https://auth.example.com

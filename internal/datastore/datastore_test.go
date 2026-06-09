@@ -69,7 +69,7 @@ func TestClassify(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.assert(t, d.classify("op", "/p", tc.err))
+			tc.assert(t, d.classify(nil, "op", "/p", tc.err))
 		})
 	}
 }

@@ -59,6 +59,11 @@ type Config struct {
 	// IRODSConnIdleTTL is how long an idle, unreferenced per-user iRODS
 	// connection is kept in the pool before being closed.
 	IRODSConnIdleTTL time.Duration
+
+	// IRODSMaxConns caps the number of cached per-user iRODS connections; when
+	// exceeded, the least-recently-used unreferenced connection is evicted.
+	// Zero means unbounded.
+	IRODSMaxConns int
 }
 
 // jsonConfig mirrors the structure of the optional config.json file.
@@ -166,6 +171,7 @@ func Load() (*Config, error) {
 	c.ListenAddr = strValue("LISTEN_ADDR", "", ":8080")
 	c.HTTPTimeout = secondsValue("HTTP_TIMEOUT", nil, 30*time.Second)
 	c.IRODSConnIdleTTL = secondsValue("IRODS_CONN_IDLE_TTL", nil, 10*time.Minute)
+	c.IRODSMaxConns = intValue("IRODS_MAX_CONNS", nil, 100)
 
 	return c, nil
 }

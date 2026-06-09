@@ -15,7 +15,7 @@ var allEnvVars = []string{
 	"USER_SUFFIX", "VICE_DOMAIN", "PATH_PREFIX", "PUBLIC_BASE_URL",
 	"VICE_URL_CHECK_TIMEOUT", "VICE_URL_CHECK_RETRIES", "VICE_URL_CHECK_CACHE_TTL",
 	"SERVICE_ACCOUNTS_ONLY", "SERVICE_ACCOUNT_USERNAMES",
-	"LISTEN_ADDR", "HTTP_TIMEOUT", "IRODS_CONN_IDLE_TTL",
+	"LISTEN_ADDR", "HTTP_TIMEOUT", "IRODS_CONN_IDLE_TTL", "IRODS_MAX_CONNS",
 }
 
 func clearEnv(t *testing.T) {
@@ -75,6 +75,9 @@ func TestLoadEnvFirst(t *testing.T) {
 				if c.IRODSConnIdleTTL != 10*time.Minute {
 					t.Errorf("idle ttl = %v, want 10m", c.IRODSConnIdleTTL)
 				}
+				if c.IRODSMaxConns != 100 {
+					t.Errorf("max conns = %d, want 100", c.IRODSMaxConns)
+				}
 			},
 		},
 		{
@@ -88,6 +91,7 @@ func TestLoadEnvFirst(t *testing.T) {
 				"SERVICE_ACCOUNT_USERNAMES": `{"app-runner":"de-service-account"}`,
 				"KEYCLOAK_SSL_VERIFY":       "false",
 				"IRODS_CONN_IDLE_TTL":       "120",
+				"IRODS_MAX_CONNS":           "50",
 			},
 			check: func(t *testing.T, c *Config) {
 				if c.AppsBaseURL.String() != "http://apps:8080" {
@@ -113,6 +117,9 @@ func TestLoadEnvFirst(t *testing.T) {
 				}
 				if c.IRODSConnIdleTTL != 2*time.Minute {
 					t.Errorf("idle ttl = %v, want 2m", c.IRODSConnIdleTTL)
+				}
+				if c.IRODSMaxConns != 50 {
+					t.Errorf("max conns = %d, want 50", c.IRODSMaxConns)
 				}
 			},
 		},

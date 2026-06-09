@@ -81,7 +81,7 @@ func buildDeps(cfg *config.Config, httpClient *http.Client, logger *slog.Logger)
 		User:     cfg.IRODSUser,
 		Password: cfg.IRODSPassword,
 		Zone:     cfg.IRODSZone,
-	}, cfg.IRODSConnIdleTTL, logger)
+	}, cfg.IRODSConnIdleTTL, cfg.IRODSMaxConns, logger)
 
 	return &mcpserver.Deps{
 		Apps:       appsClient,

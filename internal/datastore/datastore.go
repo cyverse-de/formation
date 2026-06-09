@@ -83,10 +83,11 @@ const (
 )
 
 // New returns a DataStore backed by a per-user connection pool. idleTTL bounds
-// how long an idle, unreferenced connection is kept before being closed. Call
+// how long an idle, unreferenced connection is kept before being closed, and
+// maxConns caps the number of cached connections (0 means unbounded). Call
 // Close to release all connections and stop the pool.
-func New(cfg Config, idleTTL time.Duration, logger *slog.Logger) *DataStore {
-	return &DataStore{pool: newPool(cfg, idleTTL), logger: logger}
+func New(cfg Config, idleTTL time.Duration, maxConns int, logger *slog.Logger) *DataStore {
+	return &DataStore{pool: newPool(cfg, idleTTL, maxConns), logger: logger}
 }
 
 // Close releases all pooled iRODS connections and stops the pool janitor.
@@ -97,33 +98,33 @@ func (d *DataStore) Close() {
 // Browse lists a directory or reads a file at the path, as the caller.
 func (d *DataStore) Browse(username, p string, offset, limit int, includeMetadata bool, avuDelimiter string) (*BrowseResult, error) {
 	p = normalizePath(p)
-	fsys, release, err := d.pool.acquire(username)
+	c, err := d.pool.acquire(username)
 	if err != nil {
-		return nil, d.classify("connect", username, err)
+		return nil, d.classify(nil, "connect", username, err)
 	}
-	defer release()
+	defer c.release()
 
-	entry, err := fsys.Stat(p)
+	entry, err := c.fs.Stat(p)
 	if err != nil {
-		return nil, d.classify("stat", p, err)
+		return nil, d.classify(c, "stat", p, err)
 	}
 
 	if entry.Type == fs.FileEntry {
-		return d.readFile(fsys, p, entry, offset, limit, includeMetadata, avuDelimiter)
+		return d.readFile(c, p, entry, offset, limit, includeMetadata, avuDelimiter)
 	}
-	return d.listDir(fsys, p, includeMetadata, avuDelimiter)
+	return d.listDir(c, p, includeMetadata, avuDelimiter)
 }
 
-func (d *DataStore) readFile(fsys *fs.FileSystem, p string, entry *fs.Entry, offset, limit int, includeMetadata bool, avuDelimiter string) (*BrowseResult, error) {
-	handle, err := fsys.OpenFile(p, "", "r")
+func (d *DataStore) readFile(c *conn, p string, entry *fs.Entry, offset, limit int, includeMetadata bool, avuDelimiter string) (*BrowseResult, error) {
+	handle, err := c.fs.OpenFile(p, "", "r")
 	if err != nil {
-		return nil, d.classify("open file", p, err)
+		return nil, d.classify(c, "open file", p, err)
 	}
 	defer func() { _ = handle.Close() }()
 
 	if offset > 0 {
 		if _, err := handle.Seek(int64(offset), io.SeekStart); err != nil {
-			return nil, d.classify("seek", p, err)
+			return nil, d.classify(c, "seek", p, err)
 		}
 	}
 	var reader io.Reader = handle
@@ -132,7 +133,7 @@ func (d *DataStore) readFile(fsys *fs.FileSystem, p string, entry *fs.Entry, off
 	}
 	content, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, d.classify("read file", p, err)
+		return nil, d.classify(c, "read file", p, err)
 	}
 
 	result := &BrowseResult{
@@ -143,15 +144,15 @@ func (d *DataStore) readFile(fsys *fs.FileSystem, p string, entry *fs.Entry, off
 		Offset:  offset,
 	}
 	if includeMetadata {
-		result.Metadata = d.metadataHeaders(fsys, p, avuDelimiter)
+		result.Metadata = d.metadataHeaders(c, p, avuDelimiter)
 	}
 	return result, nil
 }
 
-func (d *DataStore) listDir(fsys *fs.FileSystem, p string, includeMetadata bool, avuDelimiter string) (*BrowseResult, error) {
-	entries, err := fsys.List(p)
+func (d *DataStore) listDir(c *conn, p string, includeMetadata bool, avuDelimiter string) (*BrowseResult, error) {
+	entries, err := c.fs.List(p)
 	if err != nil {
-		return nil, d.classify("list", p, err)
+		return nil, d.classify(c, "list", p, err)
 	}
 	contents := make([]Entry, 0, len(entries))
 	for _, e := range entries {
@@ -159,7 +160,7 @@ func (d *DataStore) listDir(fsys *fs.FileSystem, p string, includeMetadata bool,
 	}
 	result := &BrowseResult{Path: p, Type: typeCollection, Contents: contents}
 	if includeMetadata {
-		result.Metadata = d.metadataHeaders(fsys, p, avuDelimiter)
+		result.Metadata = d.metadataHeaders(c, p, avuDelimiter)
 	}
 	return result, nil
 }
@@ -167,27 +168,27 @@ func (d *DataStore) listDir(fsys *fs.FileSystem, p string, includeMetadata bool,
 // CreateDirectory creates a collection (or sets metadata on an existing one).
 func (d *DataStore) CreateDirectory(username, p string, metadata []AVU) (*WriteResult, error) {
 	p = normalizePath(p)
-	fsys, release, err := d.pool.acquire(username)
+	c, err := d.pool.acquire(username)
 	if err != nil {
-		return nil, d.classify("connect", username, err)
+		return nil, d.classify(nil, "connect", username, err)
 	}
-	defer release()
+	defer c.release()
 
-	if fsys.Exists(p) {
-		if err := d.applyMetadata(fsys, p, metadata, false); err != nil {
+	if c.fs.Exists(p) {
+		if err := d.applyMetadata(c, p, metadata, false); err != nil {
 			return nil, err
 		}
 		return &WriteResult{Path: p, Type: typeCollection, Created: false}, nil
 	}
 
 	parent := path.Dir(p)
-	if !fsys.Exists(parent) {
+	if !c.fs.Exists(parent) {
 		return nil, apperr.NotFound("Parent directory", parent)
 	}
-	if err := fsys.MakeDir(p, false); err != nil {
-		return nil, d.classify("make dir", p, err)
+	if err := c.fs.MakeDir(p, false); err != nil {
+		return nil, d.classify(c, "make dir", p, err)
 	}
-	if err := d.applyMetadata(fsys, p, metadata, false); err != nil {
+	if err := d.applyMetadata(c, p, metadata, false); err != nil {
 		return nil, err
 	}
 	return &WriteResult{Path: p, Type: typeCollection, Created: true}, nil
@@ -196,13 +197,13 @@ func (d *DataStore) CreateDirectory(username, p string, metadata []AVU) (*WriteR
 // UploadFile creates or overwrites a data object with the given content.
 func (d *DataStore) UploadFile(username, p string, content []byte, metadata []AVU, replaceMetadata bool) (*WriteResult, error) {
 	p = normalizePath(p)
-	fsys, release, err := d.pool.acquire(username)
+	c, err := d.pool.acquire(username)
 	if err != nil {
-		return nil, d.classify("connect", username, err)
+		return nil, d.classify(nil, "connect", username, err)
 	}
-	defer release()
+	defer c.release()
 
-	entry, statErr := fsys.Stat(p)
+	entry, statErr := c.fs.Stat(p)
 	switch {
 	case statErr == nil:
 		if entry.IsDir() {
@@ -210,34 +211,34 @@ func (d *DataStore) UploadFile(username, p string, content []byte, metadata []AV
 		}
 	case types.IsFileNotFoundError(statErr):
 		parent := path.Dir(p)
-		if !fsys.Exists(parent) {
+		if !c.fs.Exists(parent) {
 			return nil, apperr.NotFound("Parent directory", parent)
 		}
 	default:
-		return nil, d.classify("stat", p, statErr)
+		return nil, d.classify(c, "stat", p, statErr)
 	}
 	exists := statErr == nil
 
-	if err := d.writeFile(fsys, p, content); err != nil {
+	if err := d.writeFile(c, p, content); err != nil {
 		return nil, err
 	}
-	if err := d.applyMetadata(fsys, p, metadata, replaceMetadata); err != nil {
+	if err := d.applyMetadata(c, p, metadata, replaceMetadata); err != nil {
 		return nil, err
 	}
 	return &WriteResult{Path: p, Type: typeDataObject, Created: !exists}, nil
 }
 
-func (d *DataStore) writeFile(fsys *fs.FileSystem, p string, content []byte) error {
-	handle, err := fsys.CreateFile(p, "", "w")
+func (d *DataStore) writeFile(c *conn, p string, content []byte) error {
+	handle, err := c.fs.CreateFile(p, "", "w")
 	if err != nil {
-		return d.classify("create file", p, err)
+		return d.classify(c, "create file", p, err)
 	}
 	if _, err := handle.Write(content); err != nil {
 		_ = handle.Close()
-		return d.classify("write file", p, err)
+		return d.classify(c, "write file", p, err)
 	}
 	if err := handle.Close(); err != nil {
-		return d.classify("close file", p, err)
+		return d.classify(c, "close file", p, err)
 	}
 	return nil
 }
@@ -245,24 +246,24 @@ func (d *DataStore) writeFile(fsys *fs.FileSystem, p string, content []byte) err
 // SetMetadata sets (optionally replacing) AVU metadata on an existing path.
 func (d *DataStore) SetMetadata(username, p string, metadata []AVU, replace bool) (*WriteResult, error) {
 	p = normalizePath(p)
-	fsys, release, err := d.pool.acquire(username)
+	c, err := d.pool.acquire(username)
 	if err != nil {
-		return nil, d.classify("connect", username, err)
+		return nil, d.classify(nil, "connect", username, err)
 	}
-	defer release()
+	defer c.release()
 
-	entry, statErr := fsys.Stat(p)
+	entry, statErr := c.fs.Stat(p)
 	if statErr != nil {
 		if types.IsFileNotFoundError(statErr) {
 			return nil, apperr.NotFound("Path", p)
 		}
-		return nil, d.classify("stat", p, statErr)
+		return nil, d.classify(c, "stat", p, statErr)
 	}
 	t := typeDataObject
 	if entry.IsDir() {
 		t = typeCollection
 	}
-	if err := d.applyMetadata(fsys, p, metadata, replace); err != nil {
+	if err := d.applyMetadata(c, p, metadata, replace); err != nil {
 		return nil, err
 	}
 	return &WriteResult{Path: p, Type: t, Created: false}, nil
@@ -271,41 +272,41 @@ func (d *DataStore) SetMetadata(username, p string, metadata []AVU, replace bool
 // Delete removes a file or directory, supporting dry-run and recursive deletion.
 func (d *DataStore) Delete(username, p string, recurse, dryRun bool) (*DeleteResult, error) {
 	p = normalizePath(p)
-	fsys, release, err := d.pool.acquire(username)
+	c, err := d.pool.acquire(username)
 	if err != nil {
-		return nil, d.classify("connect", username, err)
+		return nil, d.classify(nil, "connect", username, err)
 	}
-	defer release()
+	defer c.release()
 
-	entry, statErr := fsys.Stat(p)
+	entry, statErr := c.fs.Stat(p)
 	if statErr != nil {
 		if types.IsFileNotFoundError(statErr) {
 			return nil, apperr.NotFound("Path", p)
 		}
-		return nil, d.classify("stat", p, statErr)
+		return nil, d.classify(c, "stat", p, statErr)
 	}
 	if !entry.IsDir() {
-		return d.deleteFile(fsys, p, dryRun)
+		return d.deleteFile(c, p, dryRun)
 	}
-	return d.deleteDir(fsys, p, recurse, dryRun)
+	return d.deleteDir(c, p, recurse, dryRun)
 }
 
-func (d *DataStore) deleteFile(fsys *fs.FileSystem, p string, dryRun bool) (*DeleteResult, error) {
+func (d *DataStore) deleteFile(c *conn, p string, dryRun bool) (*DeleteResult, error) {
 	result := &DeleteResult{Path: p, Type: typeDataObject, WouldDelete: true, DryRun: dryRun}
 	if dryRun {
 		return result, nil
 	}
-	if err := fsys.RemoveFile(p, true); err != nil {
-		return nil, d.classify("remove file", p, err)
+	if err := c.fs.RemoveFile(p, true); err != nil {
+		return nil, d.classify(c, "remove file", p, err)
 	}
 	result.Deleted = true
 	return result, nil
 }
 
-func (d *DataStore) deleteDir(fsys *fs.FileSystem, p string, recurse, dryRun bool) (*DeleteResult, error) {
-	entries, err := fsys.List(p)
+func (d *DataStore) deleteDir(c *conn, p string, recurse, dryRun bool) (*DeleteResult, error) {
+	entries, err := c.fs.List(p)
 	if err != nil {
-		return nil, d.classify("list", p, err)
+		return nil, d.classify(c, "list", p, err)
 	}
 	itemCount := len(entries)
 
@@ -322,8 +323,8 @@ func (d *DataStore) deleteDir(fsys *fs.FileSystem, p string, recurse, dryRun boo
 	if dryRun {
 		return result, nil
 	}
-	if err := fsys.RemoveDir(p, recurse, true); err != nil {
-		return nil, d.classify("remove dir", p, err)
+	if err := c.fs.RemoveDir(p, recurse, true); err != nil {
+		return nil, d.classify(c, "remove dir", p, err)
 	}
 	result.Deleted = true
 	return result, nil
@@ -333,7 +334,7 @@ func (d *DataStore) deleteDir(fsys *fs.FileSystem, p string, recurse, dryRun boo
 // the attributes being set are removed first; unrelated metadata (including
 // system-managed AVUs such as ipc_UUID, which the user cannot delete) is left
 // intact.
-func (d *DataStore) applyMetadata(fsys *fs.FileSystem, p string, metadata []AVU, replace bool) error {
+func (d *DataStore) applyMetadata(c *conn, p string, metadata []AVU, replace bool) error {
 	if len(metadata) == 0 {
 		return nil
 	}
@@ -342,29 +343,29 @@ func (d *DataStore) applyMetadata(fsys *fs.FileSystem, p string, metadata []AVU,
 		for _, avu := range metadata {
 			setAttrs[avu.Attribute] = true
 		}
-		existing, err := fsys.ListMetadata(p)
+		existing, err := c.fs.ListMetadata(p)
 		if err != nil {
-			return d.classify("list metadata", p, err)
+			return d.classify(c, "list metadata", p, err)
 		}
 		for _, m := range existing {
 			if !setAttrs[m.Name] {
 				continue
 			}
-			if err := fsys.DeleteMetadataByAVU(p, m.Name, m.Value, m.Units); err != nil {
-				return d.classify("delete metadata", p, err)
+			if err := c.fs.DeleteMetadataByAVU(p, m.Name, m.Value, m.Units); err != nil {
+				return d.classify(c, "delete metadata", p, err)
 			}
 		}
 	}
 	for _, avu := range metadata {
-		if err := fsys.AddMetadata(p, avu.Attribute, avu.Value, avu.Units); err != nil {
-			return d.classify("add metadata", p, err)
+		if err := c.fs.AddMetadata(p, avu.Attribute, avu.Value, avu.Units); err != nil {
+			return d.classify(c, "add metadata", p, err)
 		}
 	}
 	return nil
 }
 
-func (d *DataStore) metadataHeaders(fsys *fs.FileSystem, p, delimiter string) map[string]string {
-	metas, err := fsys.ListMetadata(p)
+func (d *DataStore) metadataHeaders(c *conn, p, delimiter string) map[string]string {
+	metas, err := c.fs.ListMetadata(p)
 	if err != nil {
 		// Metadata is best-effort; return none on failure.
 		d.logf("could not list metadata; returning none", "path", p, "error", err)
@@ -374,8 +375,13 @@ func (d *DataStore) metadataHeaders(fsys *fs.FileSystem, p, delimiter string) ma
 }
 
 // classify maps an iRODS error to a sanitized domain error so raw iRODS
-// internals never reach the MCP client.
-func (d *DataStore) classify(op, p string, err error) error {
+// internals never reach the MCP client. When the failure is a transport error,
+// the leased connection (if any) is discarded so the next request reconnects
+// rather than reusing a dead connection.
+func (d *DataStore) classify(c *conn, op, p string, err error) error {
+	if c != nil && types.IsConnectionError(err) {
+		c.discard()
+	}
 	switch {
 	case types.IsFileNotFoundError(err):
 		return apperr.NotFound("Path", p)
