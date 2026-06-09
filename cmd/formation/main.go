@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 
 	"github.com/cyverse-de/formation/internal/apierror"
+	"github.com/cyverse-de/formation/internal/auth"
 	"github.com/cyverse-de/formation/internal/config"
 	"github.com/cyverse-de/formation/internal/handlers"
 )
@@ -45,7 +46,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	e := buildServer(cfg)
+	e, err := buildServer(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	go func() {
 		if err := e.Start(fmt.Sprintf(":%d", *listenPort)); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -65,7 +69,7 @@ func main() {
 }
 
 // buildServer wires up the Echo instance and routes; split from main for tests.
-func buildServer(cfg *config.Config) *echo.Echo {
+func buildServer(cfg *config.Config) (*echo.Echo, error) {
 	e := echo.New()
 	e.HideBanner = true
 	e.HTTPErrorHandler = apierror.HTTPErrorHandler
@@ -74,7 +78,19 @@ func buildServer(cfg *config.Config) *echo.Echo {
 	// PATH_PREFIX matches FastAPI's root_path: proxy metadata only, never routing.
 	log.Infof("configured path prefix (informational, routes serve at /): %s", cfg.PathPrefix)
 
-	e.GET("/", handlers.Health)
+	keycloak, err := auth.NewKeycloak(
+		cfg.KeycloakServerURL, cfg.KeycloakRealm,
+		cfg.KeycloakClientID, cfg.KeycloakClientSecret, cfg.KeycloakSSLVerify,
+	)
+	if err != nil {
+		return nil, err
+	}
+	verifier := auth.NewVerifier(cfg.KeycloakServerURL, cfg.KeycloakRealm, cfg.KeycloakSSLVerify)
+	requireUser := auth.RequireUser(verifier)
 
-	return e
+	e.GET("/", handlers.Health)
+	e.POST("/login", handlers.Login(keycloak))
+	e.GET("/user", handlers.UserInfo, requireUser)
+
+	return e, nil
 }
