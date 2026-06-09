@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -92,9 +93,7 @@ func (k *Keycloak) Token(t *testing.T, claims map[string]any) string {
 		"exp": time.Now().Add(time.Hour).Unix(),
 		"iat": time.Now().Add(-time.Minute).Unix(),
 	}
-	for name, value := range claims {
-		merged[name] = value
-	}
+	maps.Copy(merged, claims)
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, merged)
 	token.Header["kid"] = keyID
