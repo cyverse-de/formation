@@ -67,10 +67,12 @@ func buildDeps(cfg *config.Config, httpClient *http.Client, logger *slog.Logger)
 	appsClient := apps.NewAppsClient(httpClient, cfg.AppsBaseURL, logger)
 	exposerClient := apps.NewAppExposerClient(httpClient, cfg.AppExposerBaseURL, logger)
 	vice := apps.NewVICEResolver(exposerClient, apps.VICEConfig{
-		ViceDomain:       cfg.ViceDomain,
-		URLCheckRetries:  cfg.ViceURLCheckRetries,
-		URLCheckTimeout:  cfg.ViceURLCheckTimeout,
-		URLCheckCacheTTL: cfg.ViceURLCheckCacheTTL,
+		ViceDomain:          cfg.ViceDomain,
+		MaxSubdomainRetries: cfg.ViceSubdomainRetries,
+		SubdomainRetryDelay: cfg.ViceSubdomainRetryDelay,
+		URLCheckRetries:     cfg.ViceURLCheckRetries,
+		URLCheckTimeout:     cfg.ViceURLCheckTimeout,
+		URLCheckCacheTTL:    cfg.ViceURLCheckCacheTTL,
 	}, logger)
 
 	// The data store connects lazily via proxy impersonation, pooling one
@@ -88,9 +90,8 @@ func buildDeps(cfg *config.Config, httpClient *http.Client, logger *slog.Logger)
 		Exposer:    exposerClient,
 		Vice:       vice,
 		Data:       ds,
-		Logger:     logger,
 		UserSuffix: cfg.UserSuffix,
-		OutputZone: cfg.OutputZone,
+		OutputZone: cfg.IRODSZone,
 		Version:    version,
 	}
 }
@@ -99,7 +100,7 @@ func buildDeps(cfg *config.Config, httpClient *http.Client, logger *slog.Logger)
 // OAuth resource metadata, the legacy login, and a health check, honoring the
 // configured path prefix.
 func buildHandler(cfg *config.Config, httpClient *http.Client, srv *mcp.Server, logger *slog.Logger) http.Handler {
-	verifier := authz.NewVerifier(cfg, httpClient)
+	verifier := authz.NewVerifier(cfg, httpClient, logger)
 	kc := authz.NewKeycloak(cfg, httpClient)
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
@@ -109,15 +110,22 @@ func buildHandler(cfg *config.Config, httpClient *http.Client, srv *mcp.Server, 
 
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", requireAuth(mcpHandler))
-	mux.Handle("/.well-known/oauth-protected-resource", auth.ProtectedResourceMetadataHandler(httpapi.ResourceMetadata(cfg)))
+	if cfg.PublicBaseURL != "" {
+		mux.Handle("/.well-known/oauth-protected-resource", auth.ProtectedResourceMetadataHandler(httpapi.ResourceMetadata(cfg)))
+	} else {
+		logger.Warn("PUBLIC_BASE_URL is not set; OAuth resource metadata is disabled, so MCP clients cannot discover the authorization server")
+	}
 	mux.HandleFunc("/login", httpapi.Login(kc, logger))
 	mux.HandleFunc("/", httpapi.Health)
 
 	if cfg.PathPrefix == "" {
 		return mux
 	}
+	// Keep the health check reachable at the bare root too: k8s probes hit
+	// GET / directly, without the ingress path prefix.
 	prefixed := http.NewServeMux()
 	prefixed.Handle(cfg.PathPrefix+"/", http.StripPrefix(cfg.PathPrefix, mux))
+	prefixed.HandleFunc("/", httpapi.Health)
 	return prefixed
 }
 

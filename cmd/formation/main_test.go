@@ -135,6 +135,33 @@ func TestHandlerEndToEnd(t *testing.T) {
 		}
 	})
 
+	// TestHealthReachableWithPathPrefix guards the k8s probe path: probes GET /
+	// directly (no ingress prefix), so the health check must work both bare and
+	// under the configured prefix.
+	t.Run("health reachable with path prefix", func(t *testing.T) {
+		pcfg := &config.Config{
+			KeycloakServerURL: oidc.server.URL + "/",
+			KeycloakRealm:     "cyverse",
+			PublicBaseURL:     "https://formation.example.org",
+			PathPrefix:        "/formation",
+			HTTPTimeout:       5 * time.Second,
+		}
+		ph := buildHandler(pcfg, oidc.server.Client(), srv, slog.Default())
+		pts := httptest.NewServer(ph)
+		defer pts.Close()
+
+		for path, want := range map[string]int{"/": 200, "/formation/": 200, "/bogus": 404} {
+			resp, err := pts.Client().Get(pts.URL + path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != want {
+				t.Errorf("GET %s = %d, want %d", path, resp.StatusCode, want)
+			}
+		}
+	})
+
 	t.Run("mcp with valid token passes auth", func(t *testing.T) {
 		initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}`
 		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", strings.NewReader(initialize))

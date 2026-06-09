@@ -30,6 +30,7 @@ type pool struct {
 
 	mu      sync.Mutex
 	conns   map[string]*pooledConn
+	dialing map[string]chan struct{}
 	stop    chan struct{}
 	stopped bool
 
@@ -76,6 +77,7 @@ func newPool(cfg Config, idleTTL time.Duration, maxConns int) *pool {
 		idleTTL:   idleTTL,
 		maxConns:  maxConns,
 		conns:     map[string]*pooledConn{},
+		dialing:   map[string]chan struct{}{},
 		stop:      make(chan struct{}),
 		now:       time.Now,
 	}
@@ -108,31 +110,40 @@ func (p *pool) connect(username string) (*fs.FileSystem, error) {
 
 // acquire returns a leased FileSystem impersonating username. The caller must
 // invoke conn.release when done. The connection is created on first use and
-// shared thereafter.
+// shared thereafter; concurrent first acquires for the same user wait on a
+// single dial (the iRODS auth handshake is expensive) instead of each dialing.
 func (p *pool) acquire(username string) (*conn, error) {
-	p.mu.Lock()
-	if pc, ok := p.conns[username]; ok {
-		pc.refs++
-		pc.lastUsed = p.now()
+	var ch chan struct{}
+	for {
+		p.mu.Lock()
+		if pc, ok := p.conns[username]; ok {
+			pc.refs++
+			pc.lastUsed = p.now()
+			p.mu.Unlock()
+			return &conn{fs: pc.fs, pc: pc, pool: p}, nil
+		}
+		waitCh, dialInProgress := p.dialing[username]
+		if !dialInProgress {
+			ch = make(chan struct{})
+			p.dialing[username] = ch
+			p.mu.Unlock()
+			break
+		}
 		p.mu.Unlock()
-		return &conn{fs: pc.fs, pc: pc, pool: p}, nil
+		// Another goroutine is dialing for this user; wait for it and retry.
+		// If its dial failed, the next loop iteration dials here instead.
+		<-waitCh
 	}
-	p.mu.Unlock()
 
-	// Create outside the lock (it performs network I/O). A concurrent acquire
-	// for the same user may create a duplicate; the loser is released below.
+	// Dial outside the lock (it performs network I/O).
 	fsys, err := p.connectFn(username)
-	if err != nil {
-		return nil, err
-	}
 
 	p.mu.Lock()
-	if pc, ok := p.conns[username]; ok {
-		pc.refs++
-		pc.lastUsed = p.now()
+	delete(p.dialing, username)
+	defer close(ch)
+	if err != nil {
 		p.mu.Unlock()
-		p.releaseFn(fsys)
-		return &conn{fs: pc.fs, pc: pc, pool: p}, nil
+		return nil, err
 	}
 	if p.stopped {
 		// Pool was closed while we were connecting; hand back a detached entry
@@ -249,7 +260,9 @@ func (p *pool) evictIdle() {
 	}
 }
 
-// close stops the janitor and releases all cached connections.
+// close stops the janitor and releases all cached connections. Connections
+// with in-flight refs are only detached here; the last release closes them, so
+// a connection is never torn down under a running operation (or closed twice).
 func (p *pool) close() {
 	var closing []*fs.FileSystem
 	p.mu.Lock()
@@ -262,7 +275,9 @@ func (p *pool) close() {
 	for user, c := range p.conns {
 		c.detached = true
 		delete(p.conns, user)
-		closing = append(closing, c.fs)
+		if c.refs <= 0 {
+			closing = append(closing, c.fs)
+		}
 	}
 	p.mu.Unlock()
 	for _, f := range closing {

@@ -165,7 +165,7 @@ func TestVerifyAndDeriveIdentity(t *testing.T) {
 				ServiceAccountsOnly:     tc.saOnly,
 				ServiceAccountUsernames: tc.saUsernames,
 			}
-			v := NewVerifier(cfg, ots.server.Client())
+			v := NewVerifier(cfg, ots.server.Client(), nil)
 
 			if tc.expired {
 				tc.claims["exp"] = time.Now().Add(-time.Hour).Unix()

@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/base64"
+	"strconv"
 	"testing"
 	"time"
 
@@ -27,13 +28,20 @@ type fakeApps struct {
 	gotSubmission map[string]any
 	gotUsername   string
 	gotEmail      string
+	gotLimit      int
+	gotOffset     int
 }
 
 func (f *fakeApps) GetApp(_ context.Context, _, _, _ string) (*apps.App, error) {
 	return &apps.App{Name: "App", Groups: []map[string]any{{"id": "g1"}}, OverallJobType: "Interactive"}, nil
 }
-func (f *fakeApps) ListApps(_ context.Context, _ string, _, _ int, _ string) (*apps.AppList, error) {
-	return &apps.AppList{Apps: f.apps}, nil
+
+// ListApps paginates over f.apps the way the real service does.
+func (f *fakeApps) ListApps(_ context.Context, _ string, limit, offset int, _ string) (*apps.AppList, error) {
+	f.gotLimit, f.gotOffset = limit, offset
+	start := min(offset, len(f.apps))
+	end := min(start+limit, len(f.apps))
+	return &apps.AppList{Total: len(f.apps), Apps: f.apps[start:end]}, nil
 }
 func (f *fakeApps) SubmitAnalysis(_ context.Context, sub map[string]any, username, email string) (*apps.SubmitResult, error) {
 	f.gotSubmission, f.gotUsername, f.gotEmail = sub, username, email
@@ -62,9 +70,9 @@ func (f *fakeExposer) ExitWithoutSave(_ context.Context, id string) error {
 	f.calls = append(f.calls, "exit:"+id)
 	return nil
 }
-func (f *fakeExposer) ExtendTimeLimit(_ context.Context, id string) error {
+func (f *fakeExposer) ExtendTimeLimit(_ context.Context, id string) (*apps.TimeLimit, error) {
 	f.calls = append(f.calls, "extend:"+id)
-	return nil
+	return &apps.TimeLimit{TimeLimit: "1700000000"}, nil
 }
 
 type fakeVice struct {
@@ -114,7 +122,6 @@ func userCtx() context.Context {
 
 func newDeps() *Deps {
 	return &Deps{
-		Logger:     nil,
 		UserSuffix: "@iplantcollaborative.org",
 		OutputZone: "iplant",
 		Now:        func() time.Time { return time.Unix(0, 0) },
@@ -154,6 +161,52 @@ func TestListAppsStripsIntegratorSuffix(t *testing.T) {
 	}
 	if out.Apps[0].IntegratorUsername != "bob" {
 		t.Errorf("integrator = %q, want bob", out.Apps[0].IntegratorUsername)
+	}
+}
+
+// TestListAppsPassesPaginationUpstream verifies that without client-side-only
+// filters, limit/offset go straight to the apps service and its total is used.
+func TestListAppsPassesPaginationUpstream(t *testing.T) {
+	many := make([]apps.App, 30)
+	for i := range many {
+		many[i] = apps.App{ID: strconv.Itoa(i), Name: "A"}
+	}
+	d := newDeps()
+	fa := &fakeApps{apps: many}
+	d.Apps = fa
+
+	_, out, err := d.listApps(userCtx(), nil, ListAppsIn{Limit: 10, Offset: 20})
+	if err != nil {
+		t.Fatalf("listApps: %v", err)
+	}
+	if fa.gotLimit != 10 || fa.gotOffset != 20 {
+		t.Errorf("upstream limit/offset = %d/%d, want 10/20", fa.gotLimit, fa.gotOffset)
+	}
+	if out.Total != 30 || len(out.Apps) != 10 || out.Apps[0].ID != "20" {
+		t.Errorf("total=%d apps=%d first=%v", out.Total, len(out.Apps), out.Apps)
+	}
+}
+
+// TestListAppsFetchesAllPagesForLocalFilters verifies client-side filters see
+// apps beyond the service's first page instead of silently truncating at 1000.
+func TestListAppsFetchesAllPagesForLocalFilters(t *testing.T) {
+	many := make([]apps.App, 1500)
+	for i := range many {
+		jobType := "DE"
+		if i%2 == 0 {
+			jobType = "Interactive"
+		}
+		many[i] = apps.App{ID: strconv.Itoa(i), Name: "A", OverallJobType: jobType}
+	}
+	d := newDeps()
+	d.Apps = &fakeApps{apps: many}
+
+	_, out, err := d.listApps(userCtx(), nil, ListAppsIn{JobType: "VICE", Limit: 10})
+	if err != nil {
+		t.Fatalf("listApps: %v", err)
+	}
+	if out.Total != 750 {
+		t.Errorf("total = %d, want 750 (Interactive apps across all pages)", out.Total)
 	}
 }
 
@@ -227,12 +280,16 @@ func TestStopAnalysisOperations(t *testing.T) {
 			d := newDeps()
 			ex := &fakeExposer{}
 			d.Exposer = ex
+			d.Apps = &fakeApps{analysis: &apps.Analysis{ID: validUUID, Status: "Running"}}
 			_, out, err := d.stopAnalysis(userCtx(), nil, StopAnalysisIn{AnalysisID: validUUID, Operation: tc.op})
 			if err != nil {
 				t.Fatalf("stop: %v", err)
 			}
 			if out.Status != tc.wantStatus || out.OutputsSaved != tc.wantSaved {
 				t.Errorf("out = %+v", out)
+			}
+			if tc.op == "extend_time" && out.NewTimeLimit != "1700000000" {
+				t.Errorf("new time limit = %q, want 1700000000", out.NewTimeLimit)
 			}
 			if len(ex.calls) != 1 || ex.calls[0] != tc.wantCallPart+validUUID {
 				t.Errorf("calls = %v", ex.calls)
@@ -241,9 +298,51 @@ func TestStopAnalysisOperations(t *testing.T) {
 	}
 }
 
+// TestStopAnalysisRequiresOwnership verifies the caller cannot control an
+// analysis the apps service does not attribute to them.
+func TestStopAnalysisRequiresOwnership(t *testing.T) {
+	d := newDeps()
+	ex := &fakeExposer{}
+	d.Exposer = ex
+	d.Apps = &fakeApps{} // GetAnalysis returns NotFound
+	if _, _, err := d.stopAnalysis(userCtx(), nil, StopAnalysisIn{AnalysisID: validUUID, Operation: "exit"}); err == nil {
+		t.Fatal("expected error for analysis not owned by caller")
+	}
+	if len(ex.calls) != 0 {
+		t.Errorf("exposer should not be called, got %v", ex.calls)
+	}
+}
+
+// TestOpenInBrowserRequiresOwnership verifies the caller cannot resolve the
+// URL of an analysis they do not own.
+func TestOpenInBrowserRequiresOwnership(t *testing.T) {
+	d := newDeps()
+	d.Apps = &fakeApps{} // GetAnalysis returns NotFound
+	d.Vice = &fakeVice{subdomain: "abc"}
+	if _, _, err := d.openInBrowser(userCtx(), nil, OpenInBrowserIn{AnalysisID: validUUID}); err == nil {
+		t.Fatal("expected error for analysis not owned by caller")
+	}
+}
+
+// TestGetAnalysisStatusSkipsURLForTerminal verifies no subdomain resolution is
+// attempted for a finished analysis.
+func TestGetAnalysisStatusSkipsURLForTerminal(t *testing.T) {
+	d := newDeps()
+	d.Apps = &fakeApps{analysis: &apps.Analysis{ID: validUUID, Status: "Completed"}}
+	d.Vice = &fakeVice{subdomain: "abc", ready: true}
+	_, out, err := d.getAnalysisStatus(userCtx(), nil, AnalysisStatusIn{AnalysisID: validUUID})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if out.URL != "" || out.URLReady {
+		t.Errorf("expected no URL for terminal analysis, got %+v", out)
+	}
+}
+
 func TestStopAnalysisRejectsBadOperation(t *testing.T) {
 	d := newDeps()
 	d.Exposer = &fakeExposer{}
+	d.Apps = &fakeApps{analysis: &apps.Analysis{ID: validUUID, Status: "Running"}}
 	if _, _, err := d.stopAnalysis(userCtx(), nil, StopAnalysisIn{AnalysisID: validUUID, Operation: "nope"}); err == nil {
 		t.Error("expected validation error for invalid operation")
 	}

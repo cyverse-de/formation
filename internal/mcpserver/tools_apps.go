@@ -26,26 +26,39 @@ func (d *Deps) listApps(ctx context.Context, req *mcp.CallToolRequest, in ListAp
 		return nil, ListAppsOut{}, apperr.Validation("offset", "Offset must be non-negative")
 	}
 
-	// Fetch a large page and filter/paginate client-side, mirroring the original.
-	list, err := d.Apps.ListApps(ctx, id.DownstreamUsername, 1000, 0, in.Name)
-	if err != nil {
-		return nil, ListAppsOut{}, err
+	var (
+		page  []apps.App
+		total int
+	)
+	if hasLocalFilters(in) {
+		// These filters aren't supported server-side, so page through the full
+		// corpus before filtering and paginating here.
+		all, err := d.fetchAllApps(ctx, id.DownstreamUsername, in.Name)
+		if err != nil {
+			return nil, ListAppsOut{}, err
+		}
+		filtered, err := apps.FilterApps(all, apps.ListFilter{
+			Description:     in.Description,
+			Integrator:      in.Integrator,
+			IntegrationDate: in.IntegrationDate,
+			EditedDate:      in.EditedDate,
+			JobType:         in.JobType,
+			UserSuffix:      d.UserSuffix,
+		})
+		if err != nil {
+			return nil, ListAppsOut{}, err
+		}
+		total = len(filtered)
+		page = paginate(filtered, in.Offset, limit)
+	} else {
+		// Name search and pagination are handled by the apps service.
+		list, err := d.Apps.ListApps(ctx, id.DownstreamUsername, limit, in.Offset, in.Name)
+		if err != nil {
+			return nil, ListAppsOut{}, err
+		}
+		total = list.Total
+		page = list.Apps
 	}
-
-	filtered, err := apps.FilterApps(list.Apps, apps.ListFilter{
-		Description:     in.Description,
-		Integrator:      in.Integrator,
-		IntegrationDate: in.IntegrationDate,
-		EditedDate:      in.EditedDate,
-		JobType:         in.JobType,
-		UserSuffix:      d.UserSuffix,
-	})
-	if err != nil {
-		return nil, ListAppsOut{}, err
-	}
-
-	total := len(filtered)
-	page := paginate(filtered, in.Offset, limit)
 
 	out := ListAppsOut{Total: total, Apps: make([]AppOut, 0, len(page))}
 	for _, a := range page {
@@ -93,19 +106,12 @@ func (d *Deps) launchAppAndWait(ctx context.Context, req *mcp.CallToolRequest, i
 		outputZone = d.OutputZone
 	}
 
-	// Service-account tokens carry a non-routable keycloak email; fall back to
-	// the mapped user's address (username+suffix) for them.
-	jwtEmail := id.Email
-	if id.IsServiceAccount {
-		jwtEmail = ""
-	}
-
 	sub, email, err := d.Apps.PrepareSubmission(ctx, apps.PrepareInput{
 		Submission: in.Submission,
 		SystemID:   in.SystemID,
 		AppID:      in.AppID,
 		Username:   id.DownstreamUsername,
-		JWTEmail:   jwtEmail,
+		JWTEmail:   id.Email,
 		OutputZone: outputZone,
 		UserSuffix: d.UserSuffix,
 		Now:        d.Now(),
@@ -158,14 +164,30 @@ func (d *Deps) getAnalysisStatus(ctx context.Context, req *mcp.CallToolRequest, 
 	}
 	out := AnalysisStatusOut{AnalysisID: in.AnalysisID, Status: status}
 
+	// A finished analysis has no live deployment; resolving its subdomain would
+	// just retry against app-exposer until the attempts run out.
+	if isTerminalStatus(status) {
+		return nil, out, nil
+	}
 	if subdomain := d.Vice.ResolveSubdomain(ctx, in.AnalysisID); subdomain != "" {
 		url := d.Vice.URLFor(subdomain)
 		out.URL = url
 		ready, details := d.Vice.CheckURLReady(ctx, url)
 		out.URLReady = ready
-		out.URLCheckDetails = toProbeDetails(details)
+		out.URLCheckDetails = &details
 	}
 	return nil, out, nil
+}
+
+// isTerminalStatus reports whether an apps-service analysis status means the
+// analysis is no longer running.
+func isTerminalStatus(status string) bool {
+	switch status {
+	case "Completed", "Failed", "Canceled":
+		return true
+	default:
+		return false
+	}
 }
 
 func (d *Deps) listRunningAnalyses(ctx context.Context, req *mcp.CallToolRequest, in ListRunningAnalysesIn) (*mcp.CallToolResult, ListRunningAnalysesOut, error) {
@@ -195,10 +217,22 @@ func (d *Deps) listRunningAnalyses(ctx context.Context, req *mcp.CallToolRequest
 }
 
 func (d *Deps) stopAnalysis(ctx context.Context, req *mcp.CallToolRequest, in StopAnalysisIn) (*mcp.CallToolResult, StopAnalysisOut, error) {
-	if _, err := caller(ctx, req); err != nil {
+	id, err := caller(ctx, req)
+	if err != nil {
 		return nil, StopAnalysisOut{}, err
 	}
 	if err := validateUUID(in.AnalysisID, "analysis_id"); err != nil {
+		return nil, StopAnalysisOut{}, err
+	}
+	switch in.Operation {
+	case "save_and_exit", "exit", "extend_time":
+	default:
+		return nil, StopAnalysisOut{}, apperr.Validation("operation", "Invalid operation. Must be one of: save_and_exit, exit, extend_time")
+	}
+	// The exposer operations below hit admin endpoints keyed only by UUID, so
+	// resolve the analysis as the caller first: it 404s for analyses the caller
+	// doesn't own, preventing control of other users' analyses.
+	if _, err := d.Apps.GetAnalysis(ctx, in.AnalysisID, id.DownstreamUsername); err != nil {
 		return nil, StopAnalysisOut{}, err
 	}
 
@@ -216,21 +250,27 @@ func (d *Deps) stopAnalysis(ctx context.Context, req *mcp.CallToolRequest, in St
 		}
 		out.Status = "terminated"
 	case "extend_time":
-		if err := d.Exposer.ExtendTimeLimit(ctx, in.AnalysisID); err != nil {
+		tl, err := d.Exposer.ExtendTimeLimit(ctx, in.AnalysisID)
+		if err != nil {
 			return nil, StopAnalysisOut{}, err
 		}
 		out.Status = "extended"
-	default:
-		return nil, StopAnalysisOut{}, apperr.Validation("operation", "Invalid operation. Must be one of: save_and_exit, exit, extend_time")
+		out.NewTimeLimit = tl.TimeLimit
 	}
 	return nil, out, nil
 }
 
 func (d *Deps) openInBrowser(ctx context.Context, req *mcp.CallToolRequest, in OpenInBrowserIn) (*mcp.CallToolResult, OpenInBrowserOut, error) {
-	if _, err := caller(ctx, req); err != nil {
+	id, err := caller(ctx, req)
+	if err != nil {
 		return nil, OpenInBrowserOut{}, err
 	}
 	if err := validateUUID(in.AnalysisID, "analysis_id"); err != nil {
+		return nil, OpenInBrowserOut{}, err
+	}
+	// Subdomain resolution uses admin endpoints; confirm ownership first so a
+	// caller can't probe another user's analysis URL by UUID.
+	if _, err := d.Apps.GetAnalysis(ctx, in.AnalysisID, id.DownstreamUsername); err != nil {
 		return nil, OpenInBrowserOut{}, err
 	}
 	subdomain := d.Vice.ResolveSubdomain(ctx, in.AnalysisID)
@@ -250,11 +290,28 @@ func paginate(list []apps.App, offset, limit int) []apps.App {
 	return list[offset:end]
 }
 
-func toProbeDetails(d apps.ProbeDetails) *ProbeDetails {
-	return &ProbeDetails{
-		StatusCode:     d.StatusCode,
-		ResponseTimeMs: d.ResponseTimeMs,
-		Attempt:        d.Attempt,
-		Error:          d.Error,
+// hasLocalFilters reports whether the request uses filters the apps service
+// cannot apply server-side.
+func hasLocalFilters(in ListAppsIn) bool {
+	return in.Description != "" || in.Integrator != "" || in.IntegrationDate != "" ||
+		in.EditedDate != "" || in.JobType != ""
+}
+
+// fetchAllApps pages through the apps service until exhausted so local filters
+// see every accessible app, not just the first page.
+func (d *Deps) fetchAllApps(ctx context.Context, username, search string) ([]apps.App, error) {
+	const pageSize = 1000
+	// Backstop against a misbehaving upstream pager, far above real corpus sizes.
+	const maxApps = 50000
+	var all []apps.App
+	for offset := 0; ; offset += pageSize {
+		list, err := d.Apps.ListApps(ctx, username, pageSize, offset, search)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, list.Apps...)
+		if len(list.Apps) < pageSize || len(all) >= maxApps {
+			return all, nil
+		}
 	}
 }

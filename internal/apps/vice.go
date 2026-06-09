@@ -35,19 +35,22 @@ type cacheEntry struct {
 }
 
 // VICEResolver resolves analysis subdomains via app-exposer and probes VICE
-// URLs for readiness, caching probe results for a short TTL.
+// URLs for readiness, caching probe results for a short TTL and resolved
+// subdomains (immutable once assigned) for the life of the process.
 type VICEResolver struct {
 	exposer     *AppExposerClient
 	cfg         VICEConfig
 	logger      *slog.Logger
 	probeClient *http.Client
 
-	mu    sync.Mutex
-	cache map[string]cacheEntry
+	mu         sync.Mutex
+	cache      map[string]cacheEntry
+	subdomains map[string]string // analysisID -> subdomain
 
-	// now and sleep are injectable for testing.
+	// now and sleep are injectable for testing. sleep reports false when the
+	// context was cancelled before the delay elapsed.
 	now   func() time.Time
-	sleep func(time.Duration)
+	sleep func(context.Context, time.Duration) bool
 }
 
 // NewVICEResolver constructs a VICEResolver. Defaults match the original
@@ -68,6 +71,9 @@ func NewVICEResolver(exposer *AppExposerClient, cfg VICEConfig, logger *slog.Log
 	if cfg.URLCheckCacheTTL == 0 {
 		cfg.URLCheckCacheTTL = 5 * time.Second
 	}
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	return &VICEResolver{
 		exposer: exposer,
 		cfg:     cfg,
@@ -78,9 +84,23 @@ func NewVICEResolver(exposer *AppExposerClient, cfg VICEConfig, logger *slog.Log
 				return http.ErrUseLastResponse
 			},
 		},
-		cache: map[string]cacheEntry{},
-		now:   time.Now,
-		sleep: time.Sleep,
+		cache:      map[string]cacheEntry{},
+		subdomains: map[string]string{},
+		now:        time.Now,
+		sleep:      sleepCtx,
+	}
+}
+
+// sleepCtx waits for d, returning false early if ctx is cancelled so retry
+// loops stop doing work for abandoned requests.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
 	}
 }
 
@@ -91,11 +111,19 @@ func (r *VICEResolver) URLFor(subdomain string) string {
 
 // ResolveSubdomain returns the subdomain for an analysis, retrying on 404 while
 // the deployment becomes ready. It is best-effort: an empty string indicates the
-// subdomain could not be resolved (errors are logged, not returned).
+// subdomain could not be resolved (errors are logged, not returned). Successful
+// resolutions are cached so status polling does not re-query app-exposer.
 func (r *VICEResolver) ResolveSubdomain(ctx context.Context, analysisID string) string {
+	r.mu.Lock()
+	cached, ok := r.subdomains[analysisID]
+	r.mu.Unlock()
+	if ok {
+		return cached
+	}
+
 	externalID, err := r.exposer.GetExternalID(ctx, analysisID)
 	if err != nil {
-		r.logf("could not get external id for analysis; VICE URL will be omitted", "analysis_id", analysisID, "error", err)
+		r.logger.Warn("could not get external id for analysis; VICE URL will be omitted", "analysis_id", analysisID, "error", err)
 		return ""
 	}
 	if externalID == "" {
@@ -106,11 +134,12 @@ func (r *VICEResolver) ResolveSubdomain(ctx context.Context, analysisID string) 
 		data, err := r.exposer.GetAsyncData(ctx, externalID)
 		if err == nil {
 			if data.Subdomain != "" {
+				r.storeSubdomain(analysisID, data.Subdomain)
 				return data.Subdomain
 			}
 			// 200 but no subdomain yet: wait and retry.
-			if attempt < r.cfg.MaxSubdomainRetries-1 {
-				r.sleep(r.cfg.SubdomainRetryDelay)
+			if attempt < r.cfg.MaxSubdomainRetries-1 && !r.sleep(ctx, r.cfg.SubdomainRetryDelay) {
+				return ""
 			}
 			continue
 		}
@@ -119,15 +148,29 @@ func (r *VICEResolver) ResolveSubdomain(ctx context.Context, analysisID string) 
 		if errors.As(err, &se) && se.Code == http.StatusNotFound {
 			// Deployment not ready yet; this is expected shortly after launch.
 			if attempt < r.cfg.MaxSubdomainRetries-1 {
-				r.sleep(r.cfg.SubdomainRetryDelay)
+				if !r.sleep(ctx, r.cfg.SubdomainRetryDelay) {
+					return ""
+				}
 				continue
 			}
 			return ""
 		}
-		r.logf("error getting async data for analysis; VICE URL will be omitted", "external_id", externalID, "error", err)
+		r.logger.Warn("error getting async data for analysis; VICE URL will be omitted", "external_id", externalID, "error", err)
 		return ""
 	}
 	return ""
+}
+
+// storeSubdomain caches a resolved subdomain. Subdomains are immutable for the
+// life of an analysis; the size guard only bounds memory in a very long-lived
+// process, since re-resolving after a reset costs one app-exposer lookup.
+func (r *VICEResolver) storeSubdomain(analysisID, subdomain string) {
+	r.mu.Lock()
+	if len(r.subdomains) >= 4096 {
+		r.subdomains = map[string]string{}
+	}
+	r.subdomains[analysisID] = subdomain
+	r.mu.Unlock()
 }
 
 // CheckURLReady probes a VICE URL for readiness, caching the result. A status
@@ -146,8 +189,14 @@ func (r *VICEResolver) CheckURLReady(ctx context.Context, rawurl string) (bool, 
 		start := r.now()
 		resp, err := r.probe(ctx, rawurl)
 		if err != nil {
+			// A cancelled request says nothing about the URL; don't cache it.
+			if ctx.Err() != nil {
+				return false, ProbeDetails{Error: err.Error(), Attempt: attempt + 1}
+			}
 			if attempt < r.cfg.URLCheckRetries-1 {
-				r.sleep(backoff(attempt))
+				if !r.sleep(ctx, backoff(attempt)) {
+					return false, ProbeDetails{Error: err.Error(), Attempt: attempt + 1}
+				}
 				continue
 			}
 			details := ProbeDetails{Error: err.Error(), Attempt: attempt + 1}
@@ -196,14 +245,14 @@ var errFallback = fmt.Errorf("falling back to GET")
 
 func (r *VICEResolver) store(url string, at time.Time, ready bool, details ProbeDetails) {
 	r.mu.Lock()
+	// Sweep expired entries so the cache doesn't grow for the process lifetime.
+	for k, e := range r.cache {
+		if at.Sub(e.at) >= r.cfg.URLCheckCacheTTL {
+			delete(r.cache, k)
+		}
+	}
 	r.cache[url] = cacheEntry{at: at, ready: ready, details: details}
 	r.mu.Unlock()
-}
-
-func (r *VICEResolver) logf(msg string, args ...any) {
-	if r.logger != nil {
-		r.logger.Warn(msg, args...)
-	}
 }
 
 // backoff returns 0.5s * 2^attempt.

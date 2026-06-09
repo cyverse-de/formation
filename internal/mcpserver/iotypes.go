@@ -1,5 +1,10 @@
 package mcpserver
 
+import (
+	"github.com/cyverse-de/formation/internal/apps"
+	"github.com/cyverse-de/formation/internal/datastore"
+)
+
 // ListAppsIn are the inputs to the list_apps tool.
 type ListAppsIn struct {
 	Limit           int    `json:"limit,omitempty" jsonschema:"maximum number of apps to return (1-1000, default 100)"`
@@ -67,19 +72,11 @@ type AnalysisStatusIn struct {
 
 // AnalysisStatusOut is the get_analysis_status result.
 type AnalysisStatusOut struct {
-	AnalysisID      string        `json:"analysis_id"`
-	Status          string        `json:"status"`
-	URLReady        bool          `json:"url_ready"`
-	URL             string        `json:"url,omitempty"`
-	URLCheckDetails *ProbeDetails `json:"url_check_details,omitempty"`
-}
-
-// ProbeDetails mirrors the VICE URL probe outcome for the tool output.
-type ProbeDetails struct {
-	StatusCode     int    `json:"status_code,omitempty"`
-	ResponseTimeMs int    `json:"response_time_ms,omitempty"`
-	Attempt        int    `json:"attempt,omitempty"`
-	Error          string `json:"error,omitempty"`
+	AnalysisID      string             `json:"analysis_id"`
+	Status          string             `json:"status"`
+	URLReady        bool               `json:"url_ready"`
+	URL             string             `json:"url,omitempty"`
+	URLCheckDetails *apps.ProbeDetails `json:"url_check_details,omitempty"`
 }
 
 // ListRunningAnalysesIn are the inputs to the list_running_analyses tool.
@@ -113,6 +110,7 @@ type StopAnalysisOut struct {
 	Operation    string `json:"operation"`
 	Status       string `json:"status"`
 	OutputsSaved bool   `json:"outputs_saved"`
+	NewTimeLimit string `json:"new_time_limit,omitempty" jsonschema:"for extend_time, the new planned end time as a Unix-epoch string"`
 }
 
 // OpenInBrowserIn are the inputs to the open_in_browser tool.
@@ -137,15 +135,9 @@ type MetaIn struct {
 type BrowseDataIn struct {
 	Path            string `json:"path" jsonschema:"full iRODS path to a file or directory"`
 	Offset          int    `json:"offset,omitempty" jsonschema:"byte offset when reading a file"`
-	Limit           int    `json:"limit,omitempty" jsonschema:"maximum number of bytes to read from a file"`
+	Limit           int    `json:"limit,omitempty" jsonschema:"maximum number of bytes to read from a file (capped at 8 MiB per call; page larger files with offset)"`
 	IncludeMetadata bool   `json:"include_metadata,omitempty" jsonschema:"include AVU metadata in the result"`
 	AVUDelimiter    string `json:"avu_delimiter,omitempty" jsonschema:"delimiter between metadata value and units (default ',')"`
-}
-
-// EntryOut is a directory entry in the browse_data result.
-type EntryOut struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
 }
 
 // BrowseDataOut is the browse_data result. For directories, Contents is set;
@@ -153,7 +145,7 @@ type EntryOut struct {
 type BrowseDataOut struct {
 	Path     string            `json:"path"`
 	Type     string            `json:"type"`
-	Contents []EntryOut        `json:"contents,omitempty"`
+	Contents []datastore.Entry `json:"contents,omitempty"`
 	Content  string            `json:"content,omitempty" jsonschema:"file content, base64-encoded"`
 	Size     int64             `json:"size,omitempty"`
 	Offset   int               `json:"offset,omitempty"`

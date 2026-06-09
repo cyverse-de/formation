@@ -3,6 +3,7 @@ package datastore
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/cyverse/go-irodsclient/irods/common"
@@ -12,7 +13,7 @@ import (
 )
 
 func TestClassify(t *testing.T) {
-	d := &DataStore{}
+	d := &DataStore{logger: slog.New(slog.DiscardHandler)}
 	tests := []struct {
 		name   string
 		err    error

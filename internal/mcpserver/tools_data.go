@@ -25,18 +25,13 @@ func (d *Deps) browseData(ctx context.Context, req *mcp.CallToolRequest, in Brow
 	out := BrowseDataOut{
 		Path:     result.Path,
 		Type:     result.Type,
+		Contents: result.Contents,
 		Size:     result.Size,
 		Offset:   result.Offset,
 		Metadata: result.Metadata,
 	}
 	if len(result.Content) > 0 {
 		out.Content = base64.StdEncoding.EncodeToString(result.Content)
-	}
-	if len(result.Contents) > 0 {
-		out.Contents = make([]EntryOut, 0, len(result.Contents))
-		for _, e := range result.Contents {
-			out.Contents = append(out.Contents, EntryOut{Name: e.Name, Type: e.Type})
-		}
 	}
 	return nil, out, nil
 }

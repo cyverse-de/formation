@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,15 +25,23 @@ type AppsClient struct {
 // NewAppsClient constructs an AppsClient. The base URL is parsed once by the
 // caller; the http client must carry an appropriate timeout.
 func NewAppsClient(httpClient *http.Client, baseURL *url.URL, logger *slog.Logger) *AppsClient {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	return &AppsClient{httpClient: httpClient, baseURL: baseURL, logger: logger}
 }
 
-// GetApp fetches a single app definition, including its parameter groups.
+// GetApp fetches a single app definition, including its parameter groups. A
+// missing app is reported as an apperr.NotFoundError.
 func (c *AppsClient) GetApp(ctx context.Context, systemID, appID, username string) (*App, error) {
 	u := c.baseURL.JoinPath("apps", systemID, appID)
 	u.RawQuery = url.Values{"user": {username}}.Encode()
 	var app App
 	if err := doJSON(ctx, c.httpClient, c.logger, http.MethodGet, u, nil, "apps", &app); err != nil {
+		var se *StatusError
+		if errors.As(err, &se) && se.Code == http.StatusNotFound {
+			return nil, apperr.NotFound("App", appID)
+		}
 		return nil, err
 	}
 	return &app, nil
@@ -139,33 +148,27 @@ func doJSON(ctx context.Context, client *http.Client, logger *slog.Logger, metho
 	if err != nil {
 		// Don't surface the raw error: it embeds the request URL (with the
 		// user query param) and internal hostnames. Log it server-side instead.
-		logf(logger, "downstream request failed", "service", service, "method", method, "error", err)
+		logger.Error("downstream request failed", "service", service, "method", method, "error", err)
 		return fmt.Errorf("%s service request failed", service)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		logf(logger, "reading downstream response failed", "service", service, "error", err)
+		logger.Error("reading downstream response failed", "service", service, "error", err)
 		return fmt.Errorf("%s service request failed", service)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		logf(logger, "downstream returned error status", "service", service, "status", resp.StatusCode, "body", truncate(string(respBody), 512))
+		logger.Error("downstream returned error status", "service", service, "status", resp.StatusCode, "body", truncate(string(respBody), 512))
 		return &StatusError{Service: service, Code: resp.StatusCode, Body: string(respBody)}
 	}
 	if out != nil && len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, out); err != nil {
-			logf(logger, "decoding downstream response failed", "service", service, "error", err)
+			logger.Error("decoding downstream response failed", "service", service, "error", err)
 			return fmt.Errorf("%s service returned an unreadable response", service)
 		}
 	}
 	return nil
-}
-
-func logf(logger *slog.Logger, msg string, args ...any) {
-	if logger != nil {
-		logger.Error(msg, args...)
-	}
 }
 
 func truncate(s string, n int) string {

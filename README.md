@@ -31,6 +31,36 @@ endpoint.
 | `delete_data` | Delete a file or directory (supports dry-run and recursive deletion). |
 | `set_metadata` | Set AVU metadata on an iRODS file or directory. |
 
+### Differences from the original Python service
+
+The Go rewrite intentionally departs from the Python/FastAPI implementation in
+a few places:
+
+- **No analysis-details or job-type discovery tools.** The Python
+  `GET /apps/analyses/{id}/details` (full submission record) and
+  `GET /apps/job-types` endpoints have no MCP equivalents.
+  `get_analysis_status` returns status and URL readiness only, and the valid
+  job types (`VICE`, `DE`, `OSG`, `Tapis`) are documented in the `list_apps`
+  schema.
+- **Metadata replacement is per-attribute.** With `replace=true`,
+  `set_metadata` and `upload_file` replace existing values only for the
+  attributes being set. The Python service removed *all* existing AVUs first;
+  the new behavior preserves unrelated and system-managed metadata (e.g.
+  `ipc_UUID`, which users cannot recreate).
+- **`SERVICE_ACCOUNTS_ONLY` covers every tool.** Authentication happens once at
+  the `/mcp` endpoint, so the flag also gates the data-store tools; the Python
+  service only enforced it on the apps routes.
+- **Dry-run deletes respect the non-empty guard.** `delete_data` with
+  `dry_run=true` on a non-empty directory without `recurse=true` returns the
+  same error a real delete would, instead of a would-delete preview, so the
+  preview always matches the real outcome.
+- **File reads are capped.** `browse_data` returns at most 8 MiB of file
+  content per call; page through larger files with `offset`/`limit`.
+- **`list_apps` paginates the apps service.** Name searches and pagination are
+  passed through server-side, and the client-side-only filters (description,
+  integrator, dates, job type) page through the full corpus instead of
+  truncating at the first 1000 apps as the Python service did.
+
 ## Endpoints
 
 | Path | Description |
@@ -61,6 +91,66 @@ is not enforced, matching the original service). **Service accounts** — Keyclo
 principals whose `preferred_username` begins with `service-account-` — must hold
 the `app-runner` realm role; that role maps to a configurable, sanitized
 downstream username used when calling backend services.
+
+## Connecting Claude Code
+
+Formation is hosted centrally; clients connect to it over HTTPS and never run it
+locally. The MCP endpoint is `<public-base-url>/mcp` — for example
+`https://qa.cyverse.org/formation/mcp`.
+
+### Quick start (OAuth)
+
+```bash
+claude mcp add --transport http formation https://qa.cyverse.org/formation/mcp
+```
+
+Then, inside Claude Code, run `/mcp`, select `formation`, and choose
+**Authenticate**. Claude Code reads formation's protected-resource metadata,
+discovers Keycloak, and runs the authorization-code + PKCE flow in your browser;
+once you log in, the `mcp__formation__*` tools become available. Use
+`claude mcp list` to confirm the connection.
+
+Add `-s user` to make the server available in every project, or `-s project` to
+write a shared `.mcp.json` into the current repository.
+
+### Pre-registered OAuth client
+
+The quick start relies on Keycloak allowing Dynamic Client Registration. If it
+doesn't (Claude Code reports *"Incompatible auth server: does not support
+dynamic client registration"*), register a client once in the realm and point
+Claude Code at it. A public client is sufficient:
+
+- **Client authentication:** off (public client — PKCE secures the flow)
+- **Standard flow:** on (the authorization-code flow Claude Code uses)
+- **Direct access grants:** off (Claude Code does not use the password grant)
+- **Valid redirect URIs:** `http://localhost:8080/callback`
+
+```bash
+claude mcp add --transport http \
+  --client-id <keycloak-client-id> \
+  --callback-port 8080 \
+  formation https://qa.cyverse.org/formation/mcp
+```
+
+The redirect URI is a loopback address on the *user's own machine*: Claude Code
+briefly listens there to receive the OAuth callback (RFC 8252), so it is
+unrelated to where formation is hosted. Keep the registered redirect URI and
+`--callback-port` in sync; prefer an exact URI over a `*` wildcard. For a
+confidential client, add `--client-secret` (or set `MCP_CLIENT_SECRET`).
+
+### Static bearer token (quick tests)
+
+Formation accepts any valid Keycloak bearer token, so for a throwaway session you
+can skip the browser flow using the legacy login endpoint:
+
+```bash
+TOKEN=$(curl -s -u 'username:password' https://qa.cyverse.org/formation/login | jq -r .access_token)
+claude mcp add --transport http formation https://qa.cyverse.org/formation/mcp \
+  --header "Authorization: Bearer $TOKEN"
+```
+
+Keycloak access tokens are short-lived, so this suits quick checks rather than
+ongoing use.
 
 ## Requirements
 
@@ -105,10 +195,12 @@ PUBLIC_BASE_URL=https://de.cyverse.org/formation   # advertised in OAuth metadat
 SERVICE_ACCOUNTS_ONLY=false
 SERVICE_ACCOUNT_USERNAMES='{"app-runner":"de-service-account"}'
 
-# VICE URL readiness probe (seconds, except retries)
+# VICE URL readiness probe and subdomain resolution (seconds, except retries)
 VICE_URL_CHECK_TIMEOUT=5
 VICE_URL_CHECK_RETRIES=3
 VICE_URL_CHECK_CACHE_TTL=5
+VICE_SUBDOMAIN_RETRIES=5
+VICE_SUBDOMAIN_RETRY_DELAY=1
 
 # Server
 LISTEN_ADDR=:8080

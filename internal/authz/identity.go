@@ -20,12 +20,11 @@ const serviceAccountPrefix = "service-account-"
 const serviceAccountRole = "app-runner"
 
 // Identity is the resolved caller identity passed to tool handlers. For service
-// accounts, DownstreamUsername is already mapped and sanitized for backend use.
+// accounts, DownstreamUsername is already mapped and sanitized for backend use
+// and Email is empty (the Keycloak service-account address is non-routable).
 type Identity struct {
 	DownstreamUsername string
 	Email              string
-	Name               string
-	PreferredUsername  string
 	IsServiceAccount   bool
 	Roles              []string
 }

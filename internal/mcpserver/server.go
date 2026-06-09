@@ -5,7 +5,6 @@ package mcpserver
 
 import (
 	"context"
-	"log/slog"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -28,7 +27,7 @@ type AppsAPI interface {
 type ExposerAPI interface {
 	SaveAndExit(ctx context.Context, analysisID string) error
 	ExitWithoutSave(ctx context.Context, analysisID string) error
-	ExtendTimeLimit(ctx context.Context, analysisID string) error
+	ExtendTimeLimit(ctx context.Context, analysisID string) (*apps.TimeLimit, error)
 }
 
 // VICEAPI resolves VICE subdomains and probes URL readiness.
@@ -53,7 +52,6 @@ type Deps struct {
 	Exposer    ExposerAPI
 	Vice       VICEAPI
 	Data       DataStoreAPI
-	Logger     *slog.Logger
 	UserSuffix string
 	OutputZone string
 	Version    string

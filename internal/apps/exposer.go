@@ -17,6 +17,9 @@ type AppExposerClient struct {
 
 // NewAppExposerClient constructs an AppExposerClient.
 func NewAppExposerClient(httpClient *http.Client, baseURL *url.URL, logger *slog.Logger) *AppExposerClient {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	return &AppExposerClient{httpClient: httpClient, baseURL: baseURL, logger: logger}
 }
 
@@ -57,21 +60,13 @@ func (c *AppExposerClient) ExitWithoutSave(ctx context.Context, analysisID strin
 	return doJSON(ctx, c.httpClient, c.logger, http.MethodPost, u, nil, "app-exposer", nil)
 }
 
-// ExtendTimeLimit extends the analysis time limit.
-func (c *AppExposerClient) ExtendTimeLimit(ctx context.Context, analysisID string) error {
+// ExtendTimeLimit extends the analysis time limit, returning the new planned
+// end time so callers can schedule around it.
+func (c *AppExposerClient) ExtendTimeLimit(ctx context.Context, analysisID string) (*TimeLimit, error) {
 	u := c.baseURL.JoinPath("vice", "admin", "analyses", analysisID, "time-limit")
-	return doJSON(ctx, c.httpClient, c.logger, http.MethodPost, u, nil, "app-exposer", nil)
-}
-
-// CheckURLReady asks app-exposer whether the analysis URL is ready for access.
-func (c *AppExposerClient) CheckURLReady(ctx context.Context, host, username string) (bool, error) {
-	u := c.baseURL.JoinPath("vice", host, "url-ready")
-	u.RawQuery = url.Values{"user": {username}}.Encode()
-	var resp struct {
-		Ready bool `json:"ready"`
+	var tl TimeLimit
+	if err := doJSON(ctx, c.httpClient, c.logger, http.MethodPost, u, nil, "app-exposer", &tl); err != nil {
+		return nil, err
 	}
-	if err := doJSON(ctx, c.httpClient, c.logger, http.MethodGet, u, nil, "app-exposer", &resp); err != nil {
-		return false, err
-	}
-	return resp.Ready, nil
+	return &tl, nil
 }

@@ -2,7 +2,9 @@ package authz
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -21,6 +23,7 @@ import (
 type Verifier struct {
 	cfg        *config.Config
 	httpClient *http.Client
+	logger     *slog.Logger
 
 	mu       sync.Mutex
 	verifier *oidc.IDTokenVerifier
@@ -28,8 +31,11 @@ type Verifier struct {
 
 // NewVerifier constructs a Verifier. The http client is used for OIDC discovery
 // and JWKS retrieval (and should carry any required TLS settings).
-func NewVerifier(cfg *config.Config, httpClient *http.Client) *Verifier {
-	return &Verifier{cfg: cfg, httpClient: httpClient}
+func NewVerifier(cfg *config.Config, httpClient *http.Client, logger *slog.Logger) *Verifier {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	return &Verifier{cfg: cfg, httpClient: httpClient, logger: logger}
 }
 
 // claims captures the Keycloak token fields Formation relies on.
@@ -37,7 +43,6 @@ type claims struct {
 	PreferredUsername string `json:"preferred_username"`
 	Subject           string `json:"sub"`
 	Email             string `json:"email"`
-	Name              string `json:"name"`
 	RealmAccess       struct {
 		Roles []string `json:"roles"`
 	} `json:"realm_access"`
@@ -51,7 +56,10 @@ func (v *Verifier) Verify(ctx context.Context, token string, _ *http.Request) (*
 	if err != nil {
 		// A server-side failure to reach Keycloak is not the caller's fault;
 		// surfacing a non-ErrInvalidToken error yields a 500 rather than 401.
-		return nil, fmt.Errorf("oidc provider unavailable: %w", err)
+		// The middleware echoes this error's text into the response body, so log
+		// the real error (which embeds internal URLs) and return a generic one.
+		v.logger.Error("OIDC discovery failed; this usually means Keycloak is unreachable or the issuer URL is misconfigured", "issuer", v.cfg.KeycloakIssuer(), "error", err)
+		return nil, errors.New("authentication service unavailable")
 	}
 
 	idToken, err := idVerifier.Verify(oidc.ClientContext(ctx, v.httpClient), token)
@@ -96,11 +104,10 @@ func (v *Verifier) deriveIdentity(c claims) (Identity, error) {
 		if u, ok := v.cfg.ServiceAccountUsernames[serviceAccountRole]; ok {
 			mapped = u
 		}
+		// Service-account tokens carry a non-routable Keycloak email; leave
+		// Email empty so consumers fall back to the mapped user's address.
 		return Identity{
 			DownstreamUsername: sanitizeUsername(mapped),
-			Email:              c.Email,
-			Name:               c.Name,
-			PreferredUsername:  c.PreferredUsername,
 			IsServiceAccount:   true,
 			Roles:              roles,
 		}, nil
@@ -120,8 +127,6 @@ func (v *Verifier) deriveIdentity(c claims) (Identity, error) {
 	return Identity{
 		DownstreamUsername: username,
 		Email:              c.Email,
-		Name:               c.Name,
-		PreferredUsername:  c.PreferredUsername,
 		Roles:              roles,
 	}, nil
 }

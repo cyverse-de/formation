@@ -10,6 +10,7 @@
 package datastore
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -82,12 +83,31 @@ const (
 	typeDataObject = "data_object"
 )
 
+// MaxReadBytes caps how much of a data object a single Browse returns. The
+// content is base64-encoded into the MCP response, so an uncapped read of a
+// large file would balloon memory and produce an unusable result; callers
+// page through larger files with offset/limit.
+const MaxReadBytes = 8 << 20
+
 // New returns a DataStore backed by a per-user connection pool. idleTTL bounds
 // how long an idle, unreferenced connection is kept before being closed, and
 // maxConns caps the number of cached connections (0 means unbounded). Call
 // Close to release all connections and stop the pool.
 func New(cfg Config, idleTTL time.Duration, maxConns int, logger *slog.Logger) *DataStore {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	return &DataStore{pool: newPool(cfg, idleTTL, maxConns), logger: logger}
+}
+
+// lease acquires the caller's pooled connection, classifying connect failures.
+// Callers must release the returned conn.
+func (d *DataStore) lease(username string) (*conn, error) {
+	c, err := d.pool.acquire(username)
+	if err != nil {
+		return nil, d.classify(nil, "connect", username, err)
+	}
+	return c, nil
 }
 
 // Close releases all pooled iRODS connections and stops the pool janitor.
@@ -95,12 +115,19 @@ func (d *DataStore) Close() {
 	d.pool.close()
 }
 
-// Browse lists a directory or reads a file at the path, as the caller.
+// Browse lists a directory or reads a file at the path, as the caller. File
+// reads return at most MaxReadBytes bytes per call.
 func (d *DataStore) Browse(username, p string, offset, limit int, includeMetadata bool, avuDelimiter string) (*BrowseResult, error) {
+	if offset < 0 {
+		return nil, apperr.Validation("offset", "Offset must be non-negative")
+	}
+	if limit < 0 {
+		return nil, apperr.Validation("limit", "Limit must be non-negative")
+	}
 	p = normalizePath(p)
-	c, err := d.pool.acquire(username)
+	c, err := d.lease(username)
 	if err != nil {
-		return nil, d.classify(nil, "connect", username, err)
+		return nil, err
 	}
 	defer c.release()
 
@@ -127,14 +154,19 @@ func (d *DataStore) readFile(c *conn, p string, entry *fs.Entry, offset, limit i
 			return nil, d.classify(c, "seek", p, err)
 		}
 	}
-	var reader io.Reader = handle
-	if limit > 0 {
-		reader = io.LimitReader(handle, int64(limit))
+	maxBytes := int64(MaxReadBytes)
+	if limit > 0 && int64(limit) < maxBytes {
+		maxBytes = int64(limit)
 	}
-	content, err := io.ReadAll(reader)
-	if err != nil {
+	// Pre-size the buffer from the known file size to avoid growth copies.
+	var buf bytes.Buffer
+	if remaining := entry.Size - int64(offset); remaining > 0 {
+		buf.Grow(int(min(remaining, maxBytes)))
+	}
+	if _, err := buf.ReadFrom(io.LimitReader(handle, maxBytes)); err != nil {
 		return nil, d.classify(c, "read file", p, err)
 	}
+	content := buf.Bytes()
 
 	result := &BrowseResult{
 		Path:    p,
@@ -168,17 +200,24 @@ func (d *DataStore) listDir(c *conn, p string, includeMetadata bool, avuDelimite
 // CreateDirectory creates a collection (or sets metadata on an existing one).
 func (d *DataStore) CreateDirectory(username, p string, metadata []AVU) (*WriteResult, error) {
 	p = normalizePath(p)
-	c, err := d.pool.acquire(username)
+	c, err := d.lease(username)
 	if err != nil {
-		return nil, d.classify(nil, "connect", username, err)
+		return nil, err
 	}
 	defer c.release()
 
-	if c.fs.Exists(p) {
+	entry, statErr := c.fs.Stat(p)
+	if statErr == nil {
+		if !entry.IsDir() {
+			return nil, apperr.BadRequest("Cannot create directory - path exists and is a file")
+		}
 		if err := d.applyMetadata(c, p, metadata, false); err != nil {
 			return nil, err
 		}
 		return &WriteResult{Path: p, Type: typeCollection, Created: false}, nil
+	}
+	if !types.IsFileNotFoundError(statErr) {
+		return nil, d.classify(c, "stat", p, statErr)
 	}
 
 	parent := path.Dir(p)
@@ -197,9 +236,9 @@ func (d *DataStore) CreateDirectory(username, p string, metadata []AVU) (*WriteR
 // UploadFile creates or overwrites a data object with the given content.
 func (d *DataStore) UploadFile(username, p string, content []byte, metadata []AVU, replaceMetadata bool) (*WriteResult, error) {
 	p = normalizePath(p)
-	c, err := d.pool.acquire(username)
+	c, err := d.lease(username)
 	if err != nil {
-		return nil, d.classify(nil, "connect", username, err)
+		return nil, err
 	}
 	defer c.release()
 
@@ -246,9 +285,9 @@ func (d *DataStore) writeFile(c *conn, p string, content []byte) error {
 // SetMetadata sets (optionally replacing) AVU metadata on an existing path.
 func (d *DataStore) SetMetadata(username, p string, metadata []AVU, replace bool) (*WriteResult, error) {
 	p = normalizePath(p)
-	c, err := d.pool.acquire(username)
+	c, err := d.lease(username)
 	if err != nil {
-		return nil, d.classify(nil, "connect", username, err)
+		return nil, err
 	}
 	defer c.release()
 
@@ -272,9 +311,9 @@ func (d *DataStore) SetMetadata(username, p string, metadata []AVU, replace bool
 // Delete removes a file or directory, supporting dry-run and recursive deletion.
 func (d *DataStore) Delete(username, p string, recurse, dryRun bool) (*DeleteResult, error) {
 	p = normalizePath(p)
-	c, err := d.pool.acquire(username)
+	c, err := d.lease(username)
 	if err != nil {
-		return nil, d.classify(nil, "connect", username, err)
+		return nil, err
 	}
 	defer c.release()
 
@@ -368,7 +407,7 @@ func (d *DataStore) metadataHeaders(c *conn, p, delimiter string) map[string]str
 	metas, err := c.fs.ListMetadata(p)
 	if err != nil {
 		// Metadata is best-effort; return none on failure.
-		d.logf("could not list metadata; returning none", "path", p, "error", err)
+		d.logger.Warn("could not list metadata; returning none", "path", p, "error", err)
 		return map[string]string{}
 	}
 	return formatMetadataHeaders(metas, delimiter)
@@ -392,7 +431,7 @@ func (d *DataStore) classify(c *conn, op, p string, err error) error {
 	case types.IsUserNotFoundError(err):
 		return errors.New("no iRODS account exists for the authenticated user")
 	default:
-		d.logf("iRODS operation failed", "operation", op, "path", p, "error", err)
+		d.logger.Error("iRODS operation failed", "operation", op, "path", p, "error", err)
 		return fmt.Errorf("data store: %s failed", op)
 	}
 }
@@ -410,12 +449,6 @@ func isAccessDenied(err error) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func (d *DataStore) logf(msg string, args ...any) {
-	if d.logger != nil {
-		d.logger.Error(msg, args...)
 	}
 }
 

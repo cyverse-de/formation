@@ -35,7 +35,7 @@ func TestResolveSubdomainRetriesOn404(t *testing.T) {
 	defer srv.Close()
 
 	r := NewVICEResolver(exposer, VICEConfig{ViceDomain: ".cyverse.run"}, nil)
-	r.sleep = func(time.Duration) {} // no real sleeping
+	r.sleep = noSleep
 
 	sub := r.ResolveSubdomain(context.Background(), "an-1")
 	if sub != "abc123" {
@@ -47,7 +47,18 @@ func TestResolveSubdomainRetriesOn404(t *testing.T) {
 	if url := r.URLFor(sub); url != "https://abc123.cyverse.run" {
 		t.Errorf("URLFor = %q", url)
 	}
+
+	// A second resolution is served from the subdomain cache.
+	if sub := r.ResolveSubdomain(context.Background(), "an-1"); sub != "abc123" {
+		t.Errorf("cached subdomain = %q, want abc123", sub)
+	}
+	if got := asyncCalls.Load(); got != 3 {
+		t.Errorf("cache miss: async-data called %d times, want 3", got)
+	}
 }
+
+// noSleep skips retry delays in tests.
+func noSleep(context.Context, time.Duration) bool { return true }
 
 func TestResolveSubdomainGivesUp(t *testing.T) {
 	exposer, srv := newExposer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +71,7 @@ func TestResolveSubdomainGivesUp(t *testing.T) {
 	defer srv.Close()
 
 	r := NewVICEResolver(exposer, VICEConfig{MaxSubdomainRetries: 2}, nil)
-	r.sleep = func(time.Duration) {}
+	r.sleep = noSleep
 	if sub := r.ResolveSubdomain(context.Background(), "an-1"); sub != "" {
 		t.Errorf("expected empty subdomain, got %q", sub)
 	}
@@ -81,7 +92,7 @@ func TestCheckURLReady(t *testing.T) {
 
 	r := NewVICEResolver(nil, VICEConfig{URLCheckCacheTTL: time.Minute}, nil)
 	r.probeClient = srv.Client()
-	r.sleep = func(time.Duration) {}
+	r.sleep = noSleep
 
 	ready, details := r.CheckURLReady(context.Background(), srv.URL)
 	if !ready {
@@ -108,7 +119,7 @@ func TestCheckURLReadyCacheExpiry(t *testing.T) {
 
 	r := NewVICEResolver(nil, VICEConfig{URLCheckCacheTTL: time.Second}, nil)
 	r.probeClient = srv.Client()
-	r.sleep = func(time.Duration) {}
+	r.sleep = noSleep
 	current := time.Unix(1000, 0)
 	r.now = func() time.Time { return current }
 

@@ -14,9 +14,11 @@ type App struct {
 	Groups          []map[string]any `json:"groups"`
 }
 
-// AppList is the apps-service response for a list of apps.
+// AppList is the apps-service response for a list of apps. Total is the full
+// match count, which can exceed len(Apps) when the result is paginated.
 type AppList struct {
-	Apps []App `json:"apps"`
+	Total int   `json:"total"`
+	Apps  []App `json:"apps"`
 }
 
 // Analysis is the subset of an analysis record that Formation surfaces.
@@ -38,6 +40,12 @@ type SubmitResult struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Status string `json:"status"`
+}
+
+// TimeLimit is the app-exposer response carrying an analysis's planned end
+// time as a Unix-epoch string.
+type TimeLimit struct {
+	TimeLimit string `json:"time_limit"`
 }
 
 // AsyncData is the app-exposer response carrying the asynchronously generated

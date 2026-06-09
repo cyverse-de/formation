@@ -38,15 +38,16 @@ type Config struct {
 	UserSuffix string
 	ViceDomain string
 	PathPrefix string
-	OutputZone string
 
 	// Public base URL of this server, used to advertise OAuth resource metadata.
 	PublicBaseURL string
 
-	// VICE URL readiness probing
-	ViceURLCheckTimeout  time.Duration
-	ViceURLCheckRetries  int
-	ViceURLCheckCacheTTL time.Duration
+	// VICE URL readiness probing and subdomain resolution
+	ViceURLCheckTimeout     time.Duration
+	ViceURLCheckRetries     int
+	ViceURLCheckCacheTTL    time.Duration
+	ViceSubdomainRetries    int
+	ViceSubdomainRetryDelay time.Duration
 
 	// Service accounts
 	ServiceAccountsOnly     bool
@@ -94,6 +95,8 @@ type jsonConfig struct {
 		ViceURLCheckTimeout     *float64          `json:"vice_url_check_timeout"`
 		ViceURLCheckRetries     *int              `json:"vice_url_check_retries"`
 		ViceURLCheckCacheTTL    *float64          `json:"vice_url_check_cache_ttl"`
+		ViceSubdomainRetries    *int              `json:"vice_subdomain_retries"`
+		ViceSubdomainRetryDelay *float64          `json:"vice_subdomain_retry_delay"`
 		ServiceAccountsOnly     *bool             `json:"service_accounts_only"`
 		ServiceAccountUsernames map[string]string `json:"service_account_usernames"`
 	} `json:"application"`
@@ -144,7 +147,9 @@ func Load() (*Config, error) {
 	if c.KeycloakClientSecret, err = requireStr("KEYCLOAK_CLIENT_SECRET", jc.Keycloak.ClientSecret); err != nil {
 		return nil, err
 	}
-	c.KeycloakSSLVerify = boolValue("KEYCLOAK_SSL_VERIFY", jc.Keycloak.SSLVerify, true)
+	if c.KeycloakSSLVerify, err = boolValue("KEYCLOAK_SSL_VERIFY", jc.Keycloak.SSLVerify, true); err != nil {
+		return nil, err
+	}
 
 	if c.AppsBaseURL, err = parseURL(strValue("APPS_BASE_URL", jc.Services.AppsBaseURL, "http://apps")); err != nil {
 		return nil, err
@@ -156,14 +161,23 @@ func Load() (*Config, error) {
 	c.UserSuffix = strValue("USER_SUFFIX", jc.Application.UserSuffix, "@iplantcollaborative.org")
 	c.ViceDomain = strValue("VICE_DOMAIN", jc.Application.ViceDomain, ".cyverse.run")
 	c.PathPrefix = normalizePathPrefix(strValue("PATH_PREFIX", jc.Application.PathPrefix, "/formation"))
-	c.OutputZone = c.IRODSZone
 	c.PublicBaseURL = strings.TrimRight(strValue("PUBLIC_BASE_URL", jc.Application.PublicBaseURL, ""), "/")
+	if c.PublicBaseURL != "" {
+		u, perr := url.Parse(c.PublicBaseURL)
+		if perr != nil || !u.IsAbs() {
+			return nil, fmt.Errorf("PUBLIC_BASE_URL must be an absolute URL, got %q", c.PublicBaseURL)
+		}
+	}
 
 	c.ViceURLCheckTimeout = secondsValue("VICE_URL_CHECK_TIMEOUT", jc.Application.ViceURLCheckTimeout, 5*time.Second)
 	c.ViceURLCheckRetries = intValue("VICE_URL_CHECK_RETRIES", jc.Application.ViceURLCheckRetries, 3)
 	c.ViceURLCheckCacheTTL = secondsValue("VICE_URL_CHECK_CACHE_TTL", jc.Application.ViceURLCheckCacheTTL, 5*time.Second)
+	c.ViceSubdomainRetries = intValue("VICE_SUBDOMAIN_RETRIES", jc.Application.ViceSubdomainRetries, 5)
+	c.ViceSubdomainRetryDelay = secondsValue("VICE_SUBDOMAIN_RETRY_DELAY", jc.Application.ViceSubdomainRetryDelay, time.Second)
 
-	c.ServiceAccountsOnly = boolValue("SERVICE_ACCOUNTS_ONLY", jc.Application.ServiceAccountsOnly, false)
+	if c.ServiceAccountsOnly, err = boolValue("SERVICE_ACCOUNTS_ONLY", jc.Application.ServiceAccountsOnly, false); err != nil {
+		return nil, err
+	}
 	if c.ServiceAccountUsernames, err = serviceAccountUsernames(jc.Application.ServiceAccountUsernames); err != nil {
 		return nil, err
 	}
@@ -210,11 +224,8 @@ func loadJSONConfig() (*jsonConfig, error) {
 }
 
 func requireStr(envVar, jsonValue string) (string, error) {
-	if v := os.Getenv(envVar); v != "" {
+	if v := strValue(envVar, jsonValue, ""); v != "" {
 		return v, nil
-	}
-	if jsonValue != "" {
-		return jsonValue, nil
 	}
 	return "", fmt.Errorf("configuration value %s is not set (not in environment or JSON config)", envVar)
 }
@@ -229,14 +240,20 @@ func strValue(envVar, jsonValue, def string) string {
 	return def
 }
 
-func boolValue(envVar string, jsonValue *bool, def bool) bool {
+func boolValue(envVar string, jsonValue *bool, def bool) (bool, error) {
 	if v := os.Getenv(envVar); v != "" {
-		return strings.EqualFold(v, "true")
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			// Guessing at unrecognized spellings ("yes", "on") could silently
+			// flip security-relevant flags; fail loudly instead.
+			return false, fmt.Errorf("%s must be a boolean (true/false/1/0), got %q", envVar, v)
+		}
+		return b, nil
 	}
 	if jsonValue != nil {
-		return *jsonValue
+		return *jsonValue, nil
 	}
-	return def
+	return def, nil
 }
 
 func intValue(envVar string, jsonValue *int, def int) int {

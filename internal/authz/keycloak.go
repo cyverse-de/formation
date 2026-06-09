@@ -28,7 +28,7 @@ type Keycloak struct {
 
 // NewKeycloak builds a Keycloak client for the configured realm.
 func NewKeycloak(cfg *config.Config, httpClient *http.Client) *Keycloak {
-	tokenURL := cfg.KeycloakServerURL + "realms/" + cfg.KeycloakRealm + "/protocol/openid-connect/token"
+	tokenURL := cfg.KeycloakIssuer() + "/protocol/openid-connect/token"
 	return &Keycloak{
 		tokenURL:     tokenURL,
 		clientID:     cfg.KeycloakClientID,

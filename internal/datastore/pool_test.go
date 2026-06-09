@@ -1,6 +1,8 @@
 package datastore
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +21,7 @@ func newTestPoolCap(t *testing.T, idleTTL time.Duration, maxConns int) (*pool, *
 	connects := 0
 	p := &pool{
 		conns:     map[string]*pooledConn{},
+		dialing:   map[string]chan struct{}{},
 		stop:      make(chan struct{}),
 		idleTTL:   idleTTL,
 		maxConns:  maxConns,
@@ -215,6 +218,84 @@ func TestPoolDiscardReconnectsAndDefersClose(t *testing.T) {
 		t.Fatalf("discarded connection closed %d times, want 1", closed)
 	}
 	c3.release()
+}
+
+// TestPoolSingleflightDial verifies concurrent first acquires for one user
+// share a single dial instead of each opening (and discarding) a connection.
+func TestPoolSingleflightDial(t *testing.T) {
+	var connects atomic.Int32
+	gate := make(chan struct{})
+	p := &pool{
+		conns:   map[string]*pooledConn{},
+		dialing: map[string]chan struct{}{},
+		stop:    make(chan struct{}),
+		idleTTL: time.Hour,
+		now:     time.Now,
+		connectFn: func(string) (*fs.FileSystem, error) {
+			connects.Add(1)
+			<-gate
+			return nil, nil
+		},
+		releaseFn: func(*fs.FileSystem) {},
+	}
+
+	const n = 5
+	var wg sync.WaitGroup
+	conns := make([]*conn, n)
+	for i := range n {
+		wg.Go(func() {
+			c, err := p.acquire("alice")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			conns[i] = c
+		})
+	}
+	close(gate)
+	wg.Wait()
+
+	if got := connects.Load(); got != 1 {
+		t.Fatalf("dialed %d times, want 1", got)
+	}
+	if got := p.refs("alice"); got != n {
+		t.Fatalf("refs = %d, want %d", got, n)
+	}
+	for _, c := range conns {
+		c.release()
+	}
+}
+
+// TestPoolCloseDefersInFlight verifies close never tears down a connection
+// under a running operation; the last release closes it exactly once.
+func TestPoolCloseDefersInFlight(t *testing.T) {
+	p, _ := newTestPool(t, time.Hour)
+	closed := 0
+	p.releaseFn = func(*fs.FileSystem) { closed++ }
+
+	held, err := p.acquire("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idle, err := p.acquire("bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idle.release()
+
+	p.close()
+	if closed != 1 {
+		t.Fatalf("closed %d connections at close, want 1 (only bob's idle conn)", closed)
+	}
+
+	held.release()
+	if closed != 2 {
+		t.Fatalf("closed %d connections after release, want 2", closed)
+	}
+	held.release() // release is idempotent; must not double-close
+	if closed != 2 {
+		t.Fatalf("double close: closed %d connections, want 2", closed)
+	}
 }
 
 func (p *pool) refs(user string) int {
