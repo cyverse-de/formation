@@ -19,8 +19,10 @@ import (
 
 	"github.com/cyverse-de/formation/internal/apierror"
 	"github.com/cyverse-de/formation/internal/auth"
+	"github.com/cyverse-de/formation/internal/clients"
 	"github.com/cyverse-de/formation/internal/config"
 	"github.com/cyverse-de/formation/internal/handlers"
+	"github.com/cyverse-de/formation/internal/vice"
 )
 
 const serviceName = "formation"
@@ -87,10 +89,35 @@ func buildServer(cfg *config.Config) (*echo.Echo, error) {
 	}
 	verifier := auth.NewVerifier(cfg.KeycloakServerURL, cfg.KeycloakRealm, cfg.KeycloakSSLVerify)
 	requireUser := auth.RequireUser(verifier)
+	requireUserOrSA := auth.RequireUserOrServiceAccount(verifier, cfg.ServiceAccountsOnly)
+
+	appsClient, err := clients.NewApps(cfg.AppsBaseURL)
+	if err != nil {
+		return nil, err
+	}
+	exposerClient, err := clients.NewAppExposer(cfg.AppExposerBaseURL)
+	if err != nil {
+		return nil, err
+	}
+	urlChecker := vice.NewURLChecker(cfg.ViceURLCheckTimeout, cfg.ViceURLCheckRetries, cfg.ViceURLCheckCacheTTL)
+	subdomains := vice.NewSubdomainResolver(exposerClient)
+	apps := handlers.NewApps(appsClient, exposerClient, urlChecker, subdomains, cfg)
 
 	e.GET("/", handlers.Health)
 	e.POST("/login", handlers.Login(keycloak))
 	e.GET("/user", handlers.UserInfo, requireUser)
+
+	e.GET("/apps/job-types", apps.JobTypes, requireUserOrSA)
+	e.GET("/apps", apps.List, requireUserOrSA)
+	// FastAPI registered /apps/analyses/ with a trailing slash and redirected
+	// the bare path; serving both directly is strictly more compatible.
+	e.GET("/apps/analyses", apps.ListAnalyses, requireUserOrSA)
+	e.GET("/apps/analyses/", apps.ListAnalyses, requireUserOrSA)
+	e.GET("/apps/analyses/:analysis_id/status", apps.Status, requireUserOrSA)
+	e.POST("/apps/analyses/:analysis_id/control", apps.Control, requireUserOrSA)
+	e.GET("/apps/analyses/:analysis_id/details", apps.Details, requireUserOrSA)
+	e.GET("/apps/:system_id/:app_id/parameters", apps.Parameters, requireUserOrSA)
+	e.POST("/app/launch/:system_id/:app_id", apps.Launch, requireUserOrSA)
 
 	return e, nil
 }
