@@ -382,6 +382,53 @@ func TestMCPLaunchAppAndWait(t *testing.T) {
 		}
 	})
 
+	t.Run("launch with a VICE URL polls even without an overall_job_type", func(t *testing.T) {
+		restore := launchPollInterval
+		launchPollInterval = 10 * time.Millisecond
+		defer func() { launchPollInterval = restore }()
+
+		appsStub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.HasPrefix(r.URL.Path, "/apps/"):
+				// App metadata without overall_job_type, like some VICE apps.
+				_ = json.NewEncoder(w).Encode(map[string]any{"groups": []any{}})
+			case r.URL.Path == "/analyses" && r.Method == http.MethodPost:
+				_ = json.NewEncoder(w).Encode(map[string]any{"id": testAnalysisID, "status": "Submitted"})
+			case r.URL.Path == "/analyses":
+				_ = json.NewEncoder(w).Encode(map[string]any{"analyses": []map[string]any{{"id": testAnalysisID, "status": "Running"}}})
+			default:
+				w.WriteHeader(500)
+			}
+		})
+		exposerStub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/external-id"):
+				_ = json.NewEncoder(w).Encode(map[string]any{"external_id": "ext-1"})
+			case r.URL.Path == "/vice/async-data":
+				_ = json.NewEncoder(w).Encode(map[string]any{"subdomain": "a1b2c3"})
+			default:
+				w.WriteHeader(500)
+			}
+		})
+
+		env := newEnv(t, appsStub, exposerStub)
+		session := env.connect(t, nil)
+
+		result := callTool(t, session, "launch_app_and_wait", map[string]any{"app_id": testAppID, "max_wait": 1})
+		if !result.IsError {
+			t.Fatalf("IsError = false, want poll timeout (batch path taken?): %s", textContent(t, result))
+		}
+		text := textContent(t, result)
+		if strings.Contains(text, "Batch job submitted") {
+			t.Fatalf("took the batch path despite a VICE URL:\n%s", text)
+		}
+		if !strings.Contains(text, "not ready after") {
+			t.Errorf("text = %q, want poll timeout", text)
+		}
+	})
+
 	t.Run("interactive launch times out when the URL never becomes ready", func(t *testing.T) {
 		restore := launchPollInterval
 		launchPollInterval = 10 * time.Millisecond

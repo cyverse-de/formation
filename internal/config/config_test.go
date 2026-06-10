@@ -97,6 +97,25 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
+			name: "irods cache ttl defaults to disabled and loads from env",
+			json: minimalJSON,
+			env:  map[string]string{"IRODS_CACHE_TTL": "30"},
+			check: func(t *testing.T, cfg *Config) {
+				if cfg.IRODSCacheTTL != 30*time.Second {
+					t.Errorf("IRODSCacheTTL = %v, want 30s", cfg.IRODSCacheTTL)
+				}
+			},
+		},
+		{
+			name: "irods cache ttl zero by default",
+			json: minimalJSON,
+			check: func(t *testing.T, cfg *Config) {
+				if cfg.IRODSCacheTTL != 0 {
+					t.Errorf("IRODSCacheTTL = %v, want 0 (caching disabled)", cfg.IRODSCacheTTL)
+				}
+			},
+		},
+		{
 			name: "trailing slash appended to keycloak server url",
 			json: minimalJSON,
 			check: func(t *testing.T, cfg *Config) {

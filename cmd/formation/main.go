@@ -127,7 +127,7 @@ func buildServer(cfg *config.Config) (*echo.Echo, func(), error) {
 	subdomains := vice.NewSubdomainResolver(exposerClient)
 	apps := handlers.NewApps(appsClient, exposerClient, urlChecker, subdomains, cfg)
 
-	store, err := datastore.NewIRODS(cfg.IRODSHost, cfg.IRODSPort, cfg.IRODSUser, cfg.IRODSPassword, cfg.IRODSZone)
+	store, err := datastore.NewIRODS(cfg.IRODSHost, cfg.IRODSPort, cfg.IRODSUser, cfg.IRODSPassword, cfg.IRODSZone, cfg.IRODSCacheTTL)
 	if err != nil {
 		return nil, nil, err
 	}

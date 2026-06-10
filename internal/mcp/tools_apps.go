@@ -159,7 +159,11 @@ func (s *server) launchAppAndWait(ctx context.Context, req *sdk.CallToolRequest,
 	}
 	analysisID := strOr(launched, "analysis_id", "")
 
-	if jobType != "Interactive" {
+	// Some apps lack overall_job_type in their metadata, but VICE launches
+	// always come back with a URL, so the URL is the more reliable signal
+	// that there's something to wait for.
+	_, hasURL := launched["url"]
+	if jobType != "Interactive" && !hasURL {
 		return textResult(formatBatchLaunch(analysisID, jobType)), nil
 	}
 

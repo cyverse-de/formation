@@ -4,7 +4,8 @@
     "port": "1247",
     "user": "rods",
     "password": "changeme",
-    "zone": "iplant"
+    "zone": "iplant",
+    "cache_ttl": 0
   },
   "keycloak": {
     "server_url": "https://keycloak.example.com",

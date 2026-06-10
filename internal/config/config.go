@@ -38,6 +38,10 @@ type Config struct {
 	IRODSUser     string
 	IRODSPassword string
 	IRODSZone     string
+	// IRODSCacheTTL bounds the iRODS client's metadata caches; zero (the
+	// default) disables caching so writes through one replica are immediately
+	// visible through the others.
+	IRODSCacheTTL time.Duration
 
 	KeycloakServerURL    string
 	KeycloakRealm        string
@@ -104,6 +108,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.IRODSZone, err = required("IRODS_ZONE", irods, "zone"); err != nil {
+		return nil, err
+	}
+	if cfg.IRODSCacheTTL, err = duration("IRODS_CACHE_TTL", irods, "cache_ttl", 0); err != nil {
 		return nil, err
 	}
 

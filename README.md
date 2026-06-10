@@ -58,7 +58,8 @@ The config file path defaults to `config.json` in the working directory and can 
     "port": "1247",
     "user": "rods",
     "password": "changeme",
-    "zone": "iplant"
+    "zone": "iplant",
+    "cache_ttl": 0
   },
   "keycloak": {
     "server_url": "https://keycloak.example.com",
@@ -101,6 +102,7 @@ The config file path defaults to `config.json` in the working directory and can 
 - `user`: iRODS username for service account
 - `password`: iRODS password
 - `zone`: iRODS zone name
+- `cache_ttl`: iRODS client metadata cache lifetime in seconds (default: 0, caching disabled). Leave disabled when running more than one replica — a cached (or cached-negative) entry on one replica hides writes made through another until it expires (env: `IRODS_CACHE_TTL`)
 
 **keycloak**: Keycloak authentication settings
 - `server_url`: Keycloak server URL

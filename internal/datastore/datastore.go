@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	irodsfs "github.com/cyverse/go-irodsclient/fs"
 	"github.com/cyverse/go-irodsclient/irods/types"
@@ -67,13 +68,19 @@ var (
 // version's lazy session.
 type IRODS struct {
 	account *types.IRODSAccount
+	// cacheTTL bounds go-irodsclient's metadata/entry caches; zero disables
+	// them entirely. With multiple formation replicas, any caching trades
+	// read-after-write consistency for speed: a write through one replica is
+	// invisible to the others until their cached (possibly negative) entries
+	// expire, so caching should only be enabled for single-replica deployments.
+	cacheTTL time.Duration
 
 	mu sync.Mutex
 	fs *irodsfs.FileSystem
 }
 
 // NewIRODS prepares an iRODS store for the configured (rodsadmin) account.
-func NewIRODS(host, port, user, password, zone string) (*IRODS, error) {
+func NewIRODS(host, port, user, password, zone string, cacheTTL time.Duration) (*IRODS, error) {
 	portNum, err := strconv.Atoi(port)
 	if err != nil {
 		return nil, fmt.Errorf("invalid iRODS port %q: %w", port, err)
@@ -82,7 +89,7 @@ func NewIRODS(host, port, user, password, zone string) (*IRODS, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating iRODS account: %w", err)
 	}
-	return &IRODS{account: account}, nil
+	return &IRODS{account: account, cacheTTL: cacheTTL}, nil
 }
 
 // filesystem returns the connected FileSystem, dialing iRODS on first use.
@@ -90,7 +97,14 @@ func (s *IRODS) filesystem() (*irodsfs.FileSystem, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.fs == nil {
-		filesystem, err := irodsfs.NewFileSystemWithDefault(s.account, "formation")
+		config := irodsfs.NewFileSystemConfig("formation")
+		if s.cacheTTL > 0 {
+			config.Cache.Timeout = types.Duration(s.cacheTTL)
+			config.Cache.CleanupTime = types.Duration(s.cacheTTL)
+		} else {
+			config.Cache.NoCache = true
+		}
+		filesystem, err := irodsfs.NewFileSystem(s.account, config)
 		if err != nil {
 			return nil, fmt.Errorf("connecting to iRODS: %w", err)
 		}
