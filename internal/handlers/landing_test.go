@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 )
 
 func TestLanding(t *testing.T) {
+	tools := []string{"list_apps", "delete_data"}
 	tests := []struct {
 		name       string
 		cfg        config.Config
@@ -27,14 +29,15 @@ func TestLanding(t *testing.T) {
 				"claude mcp add --transport http formation",
 				`"serverUrl"`,
 				"mcp_config.json",
-				"launch_app_and_wait",
+				"list_apps",
+				"delete_data",
 			},
 		},
 		{
 			name:       "mcp disabled with path prefix",
-			cfg:        config.Config{PathPrefix: "/formation/"},
+			cfg:        config.Config{PathPrefix: "/formation"},
 			wantBody:   []string{`href="/formation/docs"`},
-			wantAbsent: []string{"MCP Server", "mcp_config.json"},
+			wantAbsent: []string{"MCP Server", "mcp_config.json", "list_apps"},
 		},
 		{
 			name:       "mcp disabled without prefix",
@@ -46,7 +49,7 @@ func TestLanding(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler, err := Landing(&tt.cfg)
+			handler, err := Landing(&tt.cfg, tools)
 			if err != nil {
 				t.Fatalf("Landing() error = %v", err)
 			}
@@ -62,6 +65,9 @@ func TestLanding(t *testing.T) {
 				t.Errorf("Content-Type = %q, want %q", ct, echo.MIMETextHTML)
 			}
 			body := rec.Body.String()
+			if cl := rec.Header().Get(echo.HeaderContentLength); cl != strconv.Itoa(len(body)) {
+				t.Errorf("Content-Length = %q, want %d", cl, len(body))
+			}
 			for _, want := range tt.wantBody {
 				if !strings.Contains(body, want) {
 					t.Errorf("body missing %q", want)

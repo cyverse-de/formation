@@ -24,7 +24,7 @@ var log = logging.Log.WithFields(logrus.Fields{"package": "mcp"})
 // path prefix inserted after /.well-known/{kind} (which the gateway must
 // route to formation).
 func RegisterWellKnown(e *echo.Echo, cfg *config.Config) {
-	prefix := strings.TrimSuffix(cfg.PathPrefix, "/")
+	prefix := cfg.PathPrefix
 
 	prm := protectedResourceMetadata(cfg)
 	asMeta := authServerMetadata(cfg)

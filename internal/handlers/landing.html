@@ -80,7 +80,6 @@
     overflow-x: auto;
     white-space: nowrap;
   }
-  .endpoint .method { color: var(--muted); margin-right: 0.75em; }
   pre {
     background: var(--code-bg);
     border: 1px solid var(--panel-edge);
@@ -157,8 +156,9 @@
     <h3>Claude Code</h3>
     <pre><code>claude mcp add --transport http formation {{.MCPURL}}</code></pre>
 
-    <h3>Claude Desktop, Cursor, and other clients</h3>
-    <p class="muted">Add to the client&rsquo;s <code>mcpServers</code> configuration:</p>
+    <h3>Cursor, VS Code, and other clients</h3>
+    <p class="muted">For clients that accept remote servers in an
+    <code>mcpServers</code> config block:</p>
     <pre><code>{
   "mcpServers": {
     "formation": {
@@ -167,6 +167,9 @@
     }
   }
 }</code></pre>
+    <p class="muted">In Claude Desktop or claude.ai, use <strong>Settings &rarr;
+    Connectors &rarr; Add custom connector</strong> with the URL above instead —
+    the desktop config file only supports local stdio servers.</p>
 
     <h3>Google Antigravity 2.0 and the agy CLI</h3>
     <p class="muted">Both share <code>~/.gemini/config/mcp_config.json</code>; note that
@@ -183,17 +186,8 @@
 
     <h3>Available tools</h3>
     <ul class="chips">
-      <li class="chip">list_apps</li>
-      <li class="chip">get_app_parameters</li>
-      <li class="chip">launch_app_and_wait</li>
-      <li class="chip">get_analysis_status</li>
-      <li class="chip">list_running_analyses</li>
-      <li class="chip">stop_analysis</li>
-      <li class="chip">browse_data</li>
-      <li class="chip">create_directory</li>
-      <li class="chip">upload_file</li>
-      <li class="chip">set_metadata</li>
-      <li class="chip">delete_data</li>
+      {{range .Tools}}<li class="chip">{{.}}</li>
+      {{end}}
     </ul>
   </section>
   {{end}}

@@ -138,6 +138,13 @@ func Load() (*Config, error) {
 	cfg.UserSuffix = optional("USER_SUFFIX", app, "user_suffix", DefaultUserSuffix)
 	cfg.ViceDomain = optional("VICE_DOMAIN", app, "vice_domain", DefaultViceDomain)
 	cfg.PathPrefix = optional("PATH_PREFIX", app, "path_prefix", DefaultPathPrefix)
+	// Normalize once so consumers can use the prefix verbatim; without a
+	// leading slash StripPathPrefix would be a silent no-op and the landing
+	// page would emit broken path-relative links.
+	cfg.PathPrefix = strings.TrimSuffix(cfg.PathPrefix, "/")
+	if cfg.PathPrefix != "" && !strings.HasPrefix(cfg.PathPrefix, "/") {
+		cfg.PathPrefix = "/" + cfg.PathPrefix
+	}
 
 	if cfg.ViceURLCheckTimeout, err = duration("VICE_URL_CHECK_TIMEOUT", app, "vice_url_check_timeout", DefaultViceURLCheckTimeout); err != nil {
 		return nil, err

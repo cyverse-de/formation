@@ -2,10 +2,11 @@
 package handlers
 
 import (
+	"bytes"
 	_ "embed"
 	"html/template"
 	"net/http"
-	"strings"
+	"strconv"
 
 	"github.com/labstack/echo/v4"
 
@@ -14,8 +15,6 @@ import (
 
 //go:embed landing.html
 var landingHTML string
-
-var landingTemplate = template.Must(template.New("landing").Parse(landingHTML))
 
 // Landing builds the unauthenticated landing page handler. The page explains
 // how to point MCP clients at /mcp and links to the Swagger UI; the Kubernetes
@@ -27,21 +26,30 @@ var landingTemplate = template.Must(template.New("landing").Parse(landingHTML))
 // @Produce html
 // @Success 200 {string} string "HTML landing page"
 // @Router / [get]
-func Landing(cfg *config.Config) (echo.HandlerFunc, error) {
-	base := cfg.PublicBaseURL
-	if base == "" {
-		base = strings.TrimSuffix(cfg.PathPrefix, "/")
-	}
-	var page strings.Builder
-	err := landingTemplate.Execute(&page, struct {
-		MCPEnabled      bool
-		MCPURL, DocsURL string
-	}{cfg.MCPEnabled, base + "/mcp", base + "/docs"})
+func Landing(cfg *config.Config, mcpTools []string) (echo.HandlerFunc, error) {
+	tmpl, err := template.New("landing").Parse(landingHTML)
 	if err != nil {
 		return nil, err
 	}
-	rendered := page.String()
+	base := cfg.PublicBaseURL
+	if base == "" {
+		base = cfg.PathPrefix
+	}
+	var page bytes.Buffer
+	err = tmpl.Execute(&page, struct {
+		MCPEnabled      bool
+		MCPURL, DocsURL string
+		Tools           []string
+	}{cfg.MCPEnabled, base + "/mcp", base + "/docs", mcpTools})
+	if err != nil {
+		return nil, err
+	}
+	rendered := page.Bytes()
+	// Pre-set Content-Length: the body exceeds net/http's pre-chunking
+	// buffer, and the probes hitting "/" shouldn't pay for chunked framing.
+	length := strconv.Itoa(len(rendered))
 	return func(c echo.Context) error {
-		return c.HTML(http.StatusOK, rendered)
+		c.Response().Header().Set(echo.HeaderContentLength, length)
+		return c.HTMLBlob(http.StatusOK, rendered)
 	}, nil
 }
