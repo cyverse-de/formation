@@ -9,6 +9,7 @@ import (
 	"path"
 	"slices"
 	"strconv"
+	"sync"
 
 	irodsfs "github.com/cyverse/go-irodsclient/fs"
 	"github.com/cyverse/go-irodsclient/irods/types"
@@ -61,12 +62,17 @@ var (
 )
 
 // IRODS is the real Store backed by a go-irodsclient FileSystem and its
-// built-in connection pool.
+// built-in connection pool. The connection is established lazily on first
+// use so the service starts without a reachable iRODS, like the Python
+// version's lazy session.
 type IRODS struct {
+	account *types.IRODSAccount
+
+	mu sync.Mutex
 	fs *irodsfs.FileSystem
 }
 
-// NewIRODS connects to iRODS as the configured (rodsadmin) account.
+// NewIRODS prepares an iRODS store for the configured (rodsadmin) account.
 func NewIRODS(host, port, user, password, zone string) (*IRODS, error) {
 	portNum, err := strconv.Atoi(port)
 	if err != nil {
@@ -76,31 +82,49 @@ func NewIRODS(host, port, user, password, zone string) (*IRODS, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating iRODS account: %w", err)
 	}
-	filesystem, err := irodsfs.NewFileSystemWithDefault(account, "formation")
-	if err != nil {
-		return nil, fmt.Errorf("connecting to iRODS: %w", err)
+	return &IRODS{account: account}, nil
+}
+
+// filesystem returns the connected FileSystem, dialing iRODS on first use.
+func (s *IRODS) filesystem() (*irodsfs.FileSystem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fs == nil {
+		filesystem, err := irodsfs.NewFileSystemWithDefault(s.account, "formation")
+		if err != nil {
+			return nil, fmt.Errorf("connecting to iRODS: %w", err)
+		}
+		s.fs = filesystem
 	}
-	return &IRODS{fs: filesystem}, nil
+	return s.fs, nil
 }
 
 // Release closes the iRODS connection pool.
 func (s *IRODS) Release() {
-	s.fs.Release()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fs != nil {
+		s.fs.Release()
+		s.fs = nil
+	}
 }
 
 // PathExists reports whether a data object or collection exists at the path.
 func (s *IRODS) PathExists(irodsPath string) bool {
-	return s.fs.Exists(irodsPath)
+	filesystem, err := s.filesystem()
+	return err == nil && filesystem.Exists(irodsPath)
 }
 
 // FileExists reports whether a data object exists at the path.
 func (s *IRODS) FileExists(irodsPath string) bool {
-	return s.fs.ExistsFile(irodsPath)
+	filesystem, err := s.filesystem()
+	return err == nil && filesystem.ExistsFile(irodsPath)
 }
 
 // CollectionExists reports whether a collection exists at the path.
 func (s *IRODS) CollectionExists(irodsPath string) bool {
-	return s.fs.ExistsDir(irodsPath)
+	filesystem, err := s.filesystem()
+	return err == nil && filesystem.ExistsDir(irodsPath)
 }
 
 // UserCanRead reports whether the user holds read, write, or own on the path.
@@ -117,7 +141,11 @@ func (s *IRODS) UserCanWrite(username, irodsPath string) bool {
 // like the Python version. Only direct user grants count; group membership is
 // not expanded (matching the original behavior).
 func (s *IRODS) userHasAccess(username, irodsPath string, levels []types.IRODSAccessLevelType) bool {
-	accesses, err := s.fs.ListACLs(irodsPath)
+	filesystem, err := s.filesystem()
+	if err != nil {
+		return false
+	}
+	accesses, err := filesystem.ListACLs(irodsPath)
 	if err != nil {
 		return false
 	}
@@ -132,7 +160,11 @@ func (s *IRODS) userHasAccess(username, irodsPath string, levels []types.IRODSAc
 // ListCollection lists a collection's immediate children, subcollections
 // first, matching the Python listing order.
 func (s *IRODS) ListCollection(irodsPath string) ([]Entry, error) {
-	children, err := s.fs.List(irodsPath)
+	filesystem, err := s.filesystem()
+	if err != nil {
+		return nil, err
+	}
+	children, err := filesystem.List(irodsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +184,11 @@ func (s *IRODS) ListCollection(irodsPath string) ([]Entry, error) {
 
 // CountCollectionItems counts a collection's immediate children.
 func (s *IRODS) CountCollectionItems(irodsPath string) (int, error) {
-	children, err := s.fs.List(irodsPath)
+	filesystem, err := s.filesystem()
+	if err != nil {
+		return 0, err
+	}
+	children, err := filesystem.List(irodsPath)
 	if err != nil {
 		return 0, err
 	}
@@ -161,22 +197,30 @@ func (s *IRODS) CountCollectionItems(irodsPath string) (int, error) {
 
 // OpenFile opens a data object for reading.
 func (s *IRODS) OpenFile(irodsPath string) (io.ReadSeekCloser, error) {
-	return s.fs.OpenFile(irodsPath, "", string(types.FileOpenModeReadOnly))
+	filesystem, err := s.filesystem()
+	if err != nil {
+		return nil, err
+	}
+	return filesystem.OpenFile(irodsPath, "", string(types.FileOpenModeReadOnly))
 }
 
 // UploadFile streams content into a data object, replacing any existing
 // content. The parent collection is created one level deep if missing, like
 // the Python upload helper.
 func (s *IRODS) UploadFile(irodsPath string, content io.Reader) error {
+	filesystem, err := s.filesystem()
+	if err != nil {
+		return err
+	}
 	parent := path.Dir(irodsPath)
-	if !s.fs.ExistsDir(parent) {
-		if err := s.fs.MakeDir(parent, false); err != nil {
+	if !filesystem.ExistsDir(parent) {
+		if err := filesystem.MakeDir(parent, false); err != nil {
 			return err
 		}
 	}
 
 	// "w+" creates the data object if needed and truncates existing content.
-	handle, err := s.fs.OpenFile(irodsPath, "", string(types.FileOpenModeWriteTruncate))
+	handle, err := filesystem.OpenFile(irodsPath, "", string(types.FileOpenModeWriteTruncate))
 	if err != nil {
 		return err
 	}
@@ -189,12 +233,20 @@ func (s *IRODS) UploadFile(irodsPath string, content io.Reader) error {
 
 // CreateDirectory creates a collection (non-recursively, like the Python version).
 func (s *IRODS) CreateDirectory(irodsPath string) error {
-	return s.fs.MakeDir(irodsPath, false)
+	filesystem, err := s.filesystem()
+	if err != nil {
+		return err
+	}
+	return filesystem.MakeDir(irodsPath, false)
 }
 
 // Metadata returns the AVU metadata on a data object or collection.
 func (s *IRODS) Metadata(irodsPath string) ([]AVU, error) {
-	metas, err := s.fs.ListMetadata(irodsPath)
+	filesystem, err := s.filesystem()
+	if err != nil {
+		return nil, err
+	}
+	metas, err := filesystem.ListMetadata(irodsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -209,10 +261,14 @@ func (s *IRODS) Metadata(irodsPath string) ([]AVU, error) {
 // set are cleared first, preserving unrelated AVUs such as ipc_UUID (a
 // deliberate improvement over the Python version, which cleared everything).
 func (s *IRODS) SetMetadata(irodsPath string, avus []AVU, replace bool) error {
+	filesystem, err := s.filesystem()
+	if err != nil {
+		return err
+	}
 	if replace {
 		// Only clear attributes that currently exist: the wildcard metadata
 		// delete errors on attributes with no AVUs.
-		existing, err := s.fs.ListMetadata(irodsPath)
+		existing, err := filesystem.ListMetadata(irodsPath)
 		if err != nil {
 			return err
 		}
@@ -226,13 +282,13 @@ func (s *IRODS) SetMetadata(irodsPath string, avus []AVU, replace bool) error {
 				continue
 			}
 			cleared[avu.Attribute] = true
-			if err := s.fs.DeleteMetadataByName(irodsPath, avu.Attribute); err != nil {
+			if err := filesystem.DeleteMetadataByName(irodsPath, avu.Attribute); err != nil {
 				return err
 			}
 		}
 	}
 	for _, avu := range avus {
-		if err := s.fs.AddMetadata(irodsPath, avu.Attribute, avu.Value, avu.Units); err != nil {
+		if err := filesystem.AddMetadata(irodsPath, avu.Attribute, avu.Value, avu.Units); err != nil {
 			return err
 		}
 	}
@@ -242,11 +298,19 @@ func (s *IRODS) SetMetadata(irodsPath string, avus []AVU, replace bool) error {
 // DeleteFile removes a data object. Like the Python unlink call it does not
 // force, so the object lands in the trash when trash is enabled.
 func (s *IRODS) DeleteFile(irodsPath string) error {
-	return s.fs.RemoveFile(irodsPath, false)
+	filesystem, err := s.filesystem()
+	if err != nil {
+		return err
+	}
+	return filesystem.RemoveFile(irodsPath, false)
 }
 
 // DeleteDirectory removes a collection, bypassing the trash (force) like the
 // Python collections.remove call.
 func (s *IRODS) DeleteDirectory(irodsPath string, recurse bool) error {
-	return s.fs.RemoveDir(irodsPath, recurse, true)
+	filesystem, err := s.filesystem()
+	if err != nil {
+		return err
+	}
+	return filesystem.RemoveDir(irodsPath, recurse, true)
 }
