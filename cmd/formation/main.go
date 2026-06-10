@@ -21,6 +21,7 @@ import (
 	"github.com/cyverse-de/formation/internal/auth"
 	"github.com/cyverse-de/formation/internal/clients"
 	"github.com/cyverse-de/formation/internal/config"
+	"github.com/cyverse-de/formation/internal/datastore"
 	"github.com/cyverse-de/formation/internal/handlers"
 	"github.com/cyverse-de/formation/internal/vice"
 )
@@ -48,10 +49,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	e, err := buildServer(cfg)
+	e, cleanup, err := buildServer(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer cleanup()
 
 	go func() {
 		if err := e.Start(fmt.Sprintf(":%d", *listenPort)); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -71,7 +73,9 @@ func main() {
 }
 
 // buildServer wires up the Echo instance and routes; split from main for tests.
-func buildServer(cfg *config.Config) (*echo.Echo, error) {
+// The returned cleanup function releases the iRODS connection pool and must be
+// called when the server shuts down.
+func buildServer(cfg *config.Config) (*echo.Echo, func(), error) {
 	e := echo.New()
 	e.HideBanner = true
 	e.HTTPErrorHandler = apierror.HTTPErrorHandler
@@ -85,7 +89,7 @@ func buildServer(cfg *config.Config) (*echo.Echo, error) {
 		cfg.KeycloakClientID, cfg.KeycloakClientSecret, cfg.KeycloakSSLVerify,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	verifier := auth.NewVerifier(cfg.KeycloakServerURL, cfg.KeycloakRealm, cfg.KeycloakSSLVerify)
 	requireUser := auth.RequireUser(verifier)
@@ -93,15 +97,21 @@ func buildServer(cfg *config.Config) (*echo.Echo, error) {
 
 	appsClient, err := clients.NewApps(cfg.AppsBaseURL)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	exposerClient, err := clients.NewAppExposer(cfg.AppExposerBaseURL)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	urlChecker := vice.NewURLChecker(cfg.ViceURLCheckTimeout, cfg.ViceURLCheckRetries, cfg.ViceURLCheckCacheTTL)
 	subdomains := vice.NewSubdomainResolver(exposerClient)
 	apps := handlers.NewApps(appsClient, exposerClient, urlChecker, subdomains, cfg)
+
+	store, err := datastore.NewIRODS(cfg.IRODSHost, cfg.IRODSPort, cfg.IRODSUser, cfg.IRODSPassword, cfg.IRODSZone)
+	if err != nil {
+		return nil, nil, err
+	}
+	data := handlers.NewData(store)
 
 	e.GET("/", handlers.Health)
 	e.POST("/login", handlers.Login(keycloak))
@@ -119,5 +129,9 @@ func buildServer(cfg *config.Config) (*echo.Echo, error) {
 	e.GET("/apps/:system_id/:app_id/parameters", apps.Parameters, requireUserOrSA)
 	e.POST("/app/launch/:system_id/:app_id", apps.Launch, requireUserOrSA)
 
-	return e, nil
+	e.GET("/data/*", data.Get, requireUser)
+	e.PUT("/data/*", data.Put, requireUser)
+	e.DELETE("/data/*", data.Delete, requireUser)
+
+	return e, store.Release, nil
 }

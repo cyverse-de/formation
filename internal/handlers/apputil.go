@@ -283,6 +283,23 @@ func intQueryParam(c echo.Context, name string, fallback int) (int, error) {
 	return parsed, nil
 }
 
+// boolQueryParam parses a boolean query parameter with a default, accepting
+// the same string forms as FastAPI/pydantic ("yes", "on", "t", "1", ...).
+func boolQueryParam(c echo.Context, name string, fallback bool) (bool, error) {
+	value := c.QueryParam(name)
+	if value == "" {
+		return fallback, nil
+	}
+	switch strings.ToLower(value) {
+	case "true", "t", "yes", "y", "1", "on":
+		return true, nil
+	case "false", "f", "no", "n", "0", "off":
+		return false, nil
+	default:
+		return false, apierror.NewValidation("Invalid boolean value for "+name, name)
+	}
+}
+
 // valueOr mirrors Python dict.get(key, default): the default applies only
 // when the key is absent, not when its value is null.
 func valueOr(m map[string]any, key string, fallback any) any {
