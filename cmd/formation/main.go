@@ -141,7 +141,11 @@ func buildServer(cfg *config.Config) (*echo.Echo, func(), error) {
 	})
 	e.GET("/docs/*", echoSwagger.WrapHandler)
 
-	e.GET("/", handlers.Health)
+	landing, err := handlers.Landing(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	e.GET("/", landing)
 	e.POST("/login", handlers.Login(keycloak))
 	e.GET("/user", handlers.UserInfo, requireUser)
 

@@ -9,16 +9,17 @@
     "paths": {
         "/": {
             "get": {
+                "description": "Static page describing how to connect AI agents to the hosted MCP server, with a link to the Swagger UI.",
                 "produces": [
-                    "application/json"
+                    "text/html"
                 ],
                 "tags": [
                     "Status"
                 ],
-                "summary": "Health check",
+                "summary": "Landing page",
                 "responses": {
                     "200": {
-                        "description": "Hello from formation.",
+                        "description": "HTML landing page",
                         "schema": {
                             "type": "string"
                         }
