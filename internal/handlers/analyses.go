@@ -19,6 +19,15 @@ import (
 
 // ListAnalyses serves GET /apps/analyses/, filtered by status (default
 // "Running"; an explicitly empty status lists all analyses, like Python).
+//
+// @Summary List the user's analyses
+// @Description Lists analyses filtered by status (default Running). Pass status with an empty value to list all analyses.
+// @Tags Analyses
+// @Security BearerAuth
+// @Produce json
+// @Param status query string false "Analysis status filter; explicitly empty lists all" default(Running)
+// @Success 200 {object} map[string]interface{} "analyses with analysis_id, name, app_id, system_id, and status"
+// @Router /apps/analyses/ [get]
 func (h *Apps) ListAnalyses(c echo.Context) error {
 	username, err := h.username(c)
 	if err != nil {
@@ -56,6 +65,16 @@ func (h *Apps) ListAnalyses(c echo.Context) error {
 
 // Status serves GET /apps/analyses/{analysis_id}/status, probing the VICE URL
 // for readiness when a subdomain exists.
+//
+// @Summary Get an analysis's status and VICE URL readiness
+// @Tags Analyses
+// @Security BearerAuth
+// @Produce json
+// @Param analysis_id path string true "Analysis UUID"
+// @Success 200 {object} map[string]interface{} "analysis_id, status, url_ready, plus url and url_check_details when a subdomain exists"
+// @Failure 400 {object} map[string]interface{} "Invalid analysis ID format"
+// @Failure 502 {object} map[string]interface{} "Apps service error (including unknown analyses)"
+// @Router /apps/analyses/{analysis_id}/status [get]
 func (h *Apps) Status(c echo.Context) error {
 	username, err := h.username(c)
 	if err != nil {
@@ -96,6 +115,17 @@ func (h *Apps) Status(c echo.Context) error {
 
 // Control serves POST /apps/analyses/{analysis_id}/control for the
 // extend_time, save_and_exit, and exit operations.
+//
+// @Summary Control a running VICE analysis
+// @Description extend_time extends the analysis's time limit; save_and_exit terminates it after saving outputs; exit terminates it without saving.
+// @Tags Analyses
+// @Security BearerAuth
+// @Produce json
+// @Param analysis_id path string true "Analysis UUID"
+// @Param operation query string true "Operation to perform" Enums(extend_time, save_and_exit, exit)
+// @Success 200 {object} map[string]interface{} "Operation result; includes the echoed operation"
+// @Failure 400 {object} map[string]interface{} "Invalid operation or analysis ID"
+// @Router /apps/analyses/{analysis_id}/control [post]
 func (h *Apps) Control(c echo.Context) error {
 	operation := c.QueryParam("operation")
 	if operation != "extend_time" && operation != "save_and_exit" && operation != "exit" {
@@ -128,6 +158,16 @@ func (h *Apps) Control(c echo.Context) error {
 
 // Details serves GET /apps/analyses/{analysis_id}/details, returning the full
 // analysis record from the apps service.
+//
+// @Summary Get an analysis's full details
+// @Tags Analyses
+// @Security BearerAuth
+// @Produce json
+// @Param analysis_id path string true "Analysis UUID"
+// @Success 200 {object} map[string]interface{} "The analysis record as returned by the apps service"
+// @Failure 400 {object} map[string]interface{} "Invalid analysis ID format"
+// @Failure 502 {object} map[string]interface{} "Apps service error (including unknown analyses)"
+// @Router /apps/analyses/{analysis_id}/details [get]
 func (h *Apps) Details(c echo.Context) error {
 	username, err := h.username(c)
 	if err != nil {
@@ -145,7 +185,35 @@ func (h *Apps) Details(c echo.Context) error {
 	return c.JSON(http.StatusOK, analysis)
 }
 
+// LaunchSubmission documents the optional launch request body for Swagger;
+// the handler accepts arbitrary submission JSON and fills in defaults.
+type LaunchSubmission struct {
+	Name         string           `json:"name,omitempty"`
+	Email        string           `json:"email,omitempty"`
+	Debug        bool             `json:"debug,omitempty"`
+	Notify       bool             `json:"notify,omitempty"`
+	OutputDir    string           `json:"output_dir,omitempty"`
+	Config       map[string]any   `json:"config,omitempty"`
+	Requirements []map[string]any `json:"requirements,omitempty"`
+}
+
 // Launch serves POST /app/launch/{system_id}/{app_id}.
+//
+// @Summary Launch an app
+// @Description Submits an analysis. The body is optional; missing fields get defaults: a generated
+// @Description analysis name, an output directory under the user's home, the email from the JWT,
+// @Description debug=false, and notify=true. Swagger UI placeholder values are stripped.
+// @Tags Apps
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param system_id path string true "Execution system id (e.g. de)"
+// @Param app_id path string true "App UUID"
+// @Param output_zone query string false "iRODS zone for the output directory (defaults to the configured zone)"
+// @Param submission body LaunchSubmission false "Analysis submission; all fields optional"
+// @Success 200 {object} map[string]interface{} "analysis_id, name, status, plus url for VICE analyses"
+// @Failure 400 {object} map[string]interface{} "Invalid app ID or request body"
+// @Router /app/launch/{system_id}/{app_id} [post]
 func (h *Apps) Launch(c echo.Context) error {
 	info := auth.GetInfo(c)
 	username, err := info.UsernameForBackend(h.serviceAccountUsernames)

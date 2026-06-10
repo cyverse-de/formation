@@ -58,6 +58,24 @@ func avuDelimiter(c echo.Context) string {
 // Get serves GET /data/{path}: raw (streamed) file contents with optional
 // offset/limit paging, or a JSON directory listing, with optional AVU
 // metadata response headers.
+//
+// @Summary Browse a directory or download a file
+// @Description Returns a JSON listing for collections, or streams raw file contents for data objects
+// @Description (offset/limit allow partial reads). With include_metadata=true, AVU metadata is returned
+// @Description in X-Datastore-{attribute} response headers, with value and units joined by avu_delimiter.
+// @Tags Data Store
+// @Security BearerAuth
+// @Produce json
+// @Produce octet-stream
+// @Param path path string true "iRODS path (e.g. cyverse/home/username)"
+// @Param offset query int false "Starting byte offset when reading a file" default(0)
+// @Param limit query int false "Maximum bytes to read; 0 or absent reads to the end"
+// @Param include_metadata query bool false "Include AVU metadata as response headers" default(false)
+// @Param avu_delimiter query string false "Separator between value and units in metadata headers" default(,)
+// @Success 200 {object} map[string]interface{} "Directory listing (JSON) or raw file contents"
+// @Failure 403 {object} map[string]interface{} "Access denied"
+// @Failure 404 {object} map[string]interface{} "Path not found"
+// @Router /data/{path} [get]
 func (h *Data) Get(c echo.Context) error {
 	irodsPath := dataPath(c)
 	if !h.store.PathExists(irodsPath) {
@@ -151,6 +169,27 @@ func (h *Data) writeMetadataHeaders(c echo.Context, irodsPath, delimiter string)
 
 // Put serves PUT /data/{path}: upload file content, create a directory
 // (resource_type=directory), or set AVU metadata from X-Datastore-* headers.
+//
+// @Summary Upload a file, create a directory, or set metadata
+// @Description Send a request body to create or update a file; use resource_type=directory with no
+// @Description body to create a collection; send no body to an existing path for a metadata-only
+// @Description update. Metadata is supplied via X-Datastore-{attribute} request headers (value and
+// @Description units split on avu_delimiter). Swagger UI cannot send arbitrary headers; use curl for
+// @Description metadata operations.
+// @Tags Data Store
+// @Security BearerAuth
+// @Accept plain
+// @Produce json
+// @Param path path string true "iRODS path"
+// @Param resource_type query string false "Set to directory to create a collection" Enums(directory)
+// @Param replace_metadata query bool false "Replace existing AVUs for the attributes being set instead of adding" default(false)
+// @Param avu_delimiter query string false "Separator between value and units in metadata headers" default(,)
+// @Param content body string false "Raw file content"
+// @Success 200 {object} map[string]interface{} "path, type, and created"
+// @Failure 400 {object} map[string]interface{} "Ambiguous operation or upload to a directory"
+// @Failure 403 {object} map[string]interface{} "Access denied"
+// @Failure 404 {object} map[string]interface{} "Parent directory not found"
+// @Router /data/{path} [put]
 func (h *Data) Put(c echo.Context) error {
 	irodsPath := dataPath(c)
 	username, err := dataUsername(c)
@@ -290,6 +329,22 @@ func metadataFromHeaders(headers http.Header, delimiter string) []datastore.AVU 
 }
 
 // Delete serves DELETE /data/{path} with recurse and dry_run options.
+//
+// @Summary Delete a file or directory
+// @Description Deletes a data object or collection. Use dry_run=true to preview the outcome without
+// @Description deleting. Deleting a non-empty directory requires recurse=true, in both real and
+// @Description dry-run mode.
+// @Tags Data Store
+// @Security BearerAuth
+// @Produce json
+// @Param path path string true "iRODS path"
+// @Param recurse query bool false "Allow deleting non-empty directories" default(false)
+// @Param dry_run query bool false "Preview the deletion without executing it" default(false)
+// @Success 200 {object} map[string]interface{} "path, type, would_delete, deleted, dry_run, and item_count for recursive non-empty directories"
+// @Failure 400 {object} map[string]interface{} "Directory not empty"
+// @Failure 403 {object} map[string]interface{} "Access denied"
+// @Failure 404 {object} map[string]interface{} "Path not found"
+// @Router /data/{path} [delete]
 func (h *Data) Delete(c echo.Context) error {
 	irodsPath := dataPath(c)
 	username, err := dataUsername(c)

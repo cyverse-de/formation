@@ -13,6 +13,18 @@ import (
 
 // Login authenticates with HTTP Basic credentials against Keycloak's password
 // grant and proxies the token response verbatim.
+//
+// @Summary Log in with username and password
+// @Description Exchanges HTTP Basic credentials for a Keycloak token using the password grant.
+// @Description Use the Authorize dialog's BasicAuth fields, run this endpoint, then paste the
+// @Description access_token from the response into the BearerAuth field to call the other endpoints.
+// @Tags Authentication
+// @Security BasicAuth
+// @Produce json
+// @Success 200 {object} map[string]interface{} "Keycloak token response (access_token, refresh_token, expires_in, ...)"
+// @Failure 401 {object} map[string]interface{} "Invalid credentials"
+// @Failure 500 {object} map[string]interface{} "Authentication service error"
+// @Router /login [post]
 func Login(kc *auth.Keycloak) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		username, password, err := basicCredentials(c)
@@ -57,6 +69,14 @@ func basicCredentials(c echo.Context) (string, string, error) {
 }
 
 // UserInfo returns the authenticated user's profile from the JWT claims.
+//
+// @Summary Get the authenticated user's profile
+// @Tags Authentication
+// @Security BearerAuth
+// @Produce json
+// @Success 200 {object} map[string]interface{} "username, email, name, preferred_username"
+// @Failure 401 {object} map[string]interface{} "Invalid or missing token"
+// @Router /user [get]
 func UserInfo(c echo.Context) error {
 	claims := auth.GetInfo(c).Claims
 	username, err := claims.Username()

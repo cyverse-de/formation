@@ -49,6 +49,13 @@ func (h *Apps) username(c echo.Context) (string, error) {
 }
 
 // JobTypes lists the valid job type values for the GET /apps job_type filter.
+//
+// @Summary List supported job types
+// @Tags Apps
+// @Security BearerAuth
+// @Produce json
+// @Success 200 {object} map[string]interface{} "job_types entries with name, description, and internal_name"
+// @Router /apps/job-types [get]
 func (h *Apps) JobTypes(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{"job_types": jobTypes})
 }
@@ -57,6 +64,24 @@ func (h *Apps) JobTypes(c echo.Context) error {
 // version (which always fetched one 1000-app page), unfiltered requests pass
 // limit/offset straight upstream and filtered requests page through the full
 // corpus, so results are no longer truncated at 1000 apps.
+//
+// @Summary List apps available to the user
+// @Description Lists apps with optional filters. Date filters use the form <operator><ISO-8601 date>,
+// @Description e.g. '>2025-09-29' or '<=2024-12-31T23:59:59' (see docs/DATE_FILTERING.md).
+// @Tags Apps
+// @Security BearerAuth
+// @Produce json
+// @Param limit query int false "Page size (1-1000)" default(100)
+// @Param offset query int false "Page offset" default(0)
+// @Param name query string false "Search term forwarded to the apps service"
+// @Param job_type query string false "Job type filter" Enums(vice, interactive, de, osg, tapis)
+// @Param description query string false "Case-insensitive substring match on the description"
+// @Param integrator query string false "Case-insensitive substring match on the integrator username"
+// @Param integration_date query string false "Date filter on the integration date"
+// @Param edited_date query string false "Date filter on the last-edited date"
+// @Success 200 {object} map[string]interface{} "total and apps"
+// @Failure 400 {object} map[string]interface{} "Invalid pagination value or date filter"
+// @Router /apps [get]
 func (h *Apps) List(c echo.Context) error {
 	limit, err := intQueryParam(c, "limit", 100)
 	if err != nil {
@@ -141,6 +166,17 @@ func (h *Apps) List(c echo.Context) error {
 }
 
 // Parameters serves GET /apps/{system_id}/{app_id}/parameters.
+//
+// @Summary Get an app's parameter groups
+// @Tags Apps
+// @Security BearerAuth
+// @Produce json
+// @Param system_id path string true "Execution system id (e.g. de)"
+// @Param app_id path string true "App UUID"
+// @Success 200 {object} map[string]interface{} "groups and overall_job_type"
+// @Failure 400 {object} map[string]interface{} "Invalid app ID format"
+// @Failure 502 {object} map[string]interface{} "Apps service error (including unknown apps)"
+// @Router /apps/{system_id}/{app_id}/parameters [get]
 func (h *Apps) Parameters(c echo.Context) error {
 	username, err := h.username(c)
 	if err != nil {

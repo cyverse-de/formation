@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,8 +16,10 @@ import (
 	"github.com/cyverse-de/go-mod/otelutils"
 	"github.com/labstack/echo/v4"
 	"github.com/sirupsen/logrus"
+	echoSwagger "github.com/swaggo/echo-swagger"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 
+	"github.com/cyverse-de/formation/apidocs"
 	"github.com/cyverse-de/formation/internal/apierror"
 	"github.com/cyverse-de/formation/internal/auth"
 	"github.com/cyverse-de/formation/internal/clients"
@@ -30,6 +33,20 @@ const serviceName = "formation"
 
 var log = logging.Log.WithFields(logrus.Fields{"service": serviceName})
 
+// @title formation
+// @version 1.0
+// @description REST API for the CyVerse Discovery Environment: app discovery and launching, analysis management, and iRODS data access.
+// @description
+// @description To authenticate: open the Authorize dialog and enter your username and password under BasicAuth,
+// @description run POST /login, then copy the access_token from the response into the BearerAuth value
+// @description (prefixed with "Bearer ") to call the other endpoints.
+//
+// @securityDefinitions.basic BasicAuth
+//
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description A Keycloak JWT prefixed with "Bearer ". Obtain one via POST /login.
 func main() {
 	var (
 		listenPort = flag.Int("listen-port", 8000, "The port to listen on for HTTP requests.")
@@ -114,6 +131,14 @@ func buildServer(cfg *config.Config) (*echo.Echo, func(), error) {
 		return nil, nil, err
 	}
 	data := handlers.NewData(store)
+
+	// The spec's basePath makes Swagger UI's try-it-out requests include the
+	// gateway prefix; direct (unprefixed) access works via StripPathPrefix.
+	apidocs.SwaggerInfo.BasePath = strings.TrimSuffix(cfg.PathPrefix, "/")
+	e.GET("/docs", func(c echo.Context) error {
+		return c.Redirect(http.StatusMovedPermanently, "docs/index.html")
+	})
+	e.GET("/docs/*", echoSwagger.WrapHandler)
 
 	e.GET("/", handlers.Health)
 	e.POST("/login", handlers.Login(keycloak))

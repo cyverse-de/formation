@@ -177,10 +177,19 @@ Formation was originally implemented in Python with FastAPI and rewritten in Go 
 - `DELETE /data` dry runs report the same error a real delete would for non-empty directories without `recurse=true`.
 - `GET /apps` uses real upstream pagination, so results are no longer truncated at 1000 apps when filtering.
 
-Small mechanical differences from FastAPI: malformed query parameters return `400` with a `{"detail": ...}` body instead of pydantic's `422` validation arrays, an invalid date filter returns `400` instead of an unhandled `500`, and `GET /apps/analyses` (without the trailing slash) is served directly instead of being redirected. The Swagger UI at `/docs` is no longer served; health checks should use `/`.
+Small mechanical differences from FastAPI: malformed query parameters return `400` with a `{"detail": ...}` body instead of pydantic's `422` validation arrays, an invalid date filter returns `400` instead of an unhandled `500`, and `GET /apps/analyses` (without the trailing slash) is served directly instead of being redirected. Health checks should use `/` rather than `/docs`.
 
 ## Documentation
 
 - [API Endpoints](docs/API_ENDPOINTS.md) - Complete API endpoint reference
-- [Interactive Apps Endpoint](docs/INTERACTIVE_APPS_ENDPOINT.md) - Detailed documentation for the `/apps` endpoint
 - [Date Filtering](docs/DATE_FILTERING.md) - Date filter syntax and usage examples
+
+## API Documentation
+
+Interactive Swagger UI is available at `/docs` when the server is running (e.g. `http://localhost:8000/docs`). To authenticate in the UI: open the Authorize dialog, fill in the BasicAuth username/password, execute `POST /login`, then paste the returned `access_token` into the BearerAuth value as `Bearer <token>`.
+
+The OpenAPI spec is generated from [swaggo/swag](https://github.com/swaggo/swag) annotations on the handlers into the committed `apidocs` package. After changing annotations, regenerate with:
+
+```bash
+go run github.com/swaggo/swag/cmd/swag@latest init -g cmd/formation/main.go -o apidocs --outputTypes go,json
+```

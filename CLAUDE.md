@@ -45,3 +45,4 @@
 - 'go run ./cmd/formation' launches the formation server locally (port 8000 by default).
 - 'go test ./...' runs the unit tests.
 - 'golangci-lint run ./...' lints the code.
+- 'go run github.com/swaggo/swag/cmd/swag@latest init -g cmd/formation/main.go -o apidocs --outputTypes go,json' regenerates the Swagger spec (the apidocs package); run it after changing handler annotations or routes.
