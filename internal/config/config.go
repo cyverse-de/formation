@@ -4,6 +4,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -24,6 +25,9 @@ const (
 	DefaultViceURLCheckTimeout  = 5 * time.Second
 	DefaultViceURLCheckRetries  = 3
 	DefaultViceURLCheckCacheTTL = 5 * time.Second
+	DefaultMCPScopes            = "openid profile email"
+	DefaultMCPLaunchMaxWait     = 540 * time.Second
+	DefaultMCPBrowseByteLimit   = 1 << 20
 )
 
 // Config holds all formation settings.
@@ -57,6 +61,17 @@ type Config struct {
 
 	ServiceAccountsOnly     bool
 	ServiceAccountUsernames map[string]string
+
+	// MCP server settings. PublicBaseURL is formation's externally visible
+	// base URL (e.g. https://de.cyverse.org/formation), used to build the
+	// OAuth resource identifier and discovery metadata. MCPClientID is the
+	// shared public Keycloak client returned by the registration shim.
+	MCPEnabled         bool
+	MCPClientID        string
+	PublicBaseURL      string
+	MCPScopes          string
+	MCPLaunchMaxWait   time.Duration
+	MCPBrowseByteLimit int
 }
 
 // Load reads the JSON file named by CONFIG_FILE (default config.json, relative
@@ -134,6 +149,24 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	cfg.MCPEnabled = boolValue("MCP_ENABLED", app, "mcp_enabled", true)
+	if cfg.MCPEnabled {
+		if cfg.MCPClientID, err = required("MCP_CLIENT_ID", keycloak, "mcp_client_id"); err != nil {
+			return nil, err
+		}
+		if cfg.PublicBaseURL, err = required("PUBLIC_BASE_URL", app, "public_base_url"); err != nil {
+			return nil, err
+		}
+		cfg.PublicBaseURL = strings.TrimSuffix(cfg.PublicBaseURL, "/")
+	}
+	cfg.MCPScopes = optional("MCP_SCOPES", keycloak, "mcp_scopes", DefaultMCPScopes)
+	if cfg.MCPLaunchMaxWait, err = duration("MCP_LAUNCH_MAX_WAIT", app, "mcp_launch_max_wait", DefaultMCPLaunchMaxWait); err != nil {
+		return nil, err
+	}
+	if cfg.MCPBrowseByteLimit, err = integer("MCP_BROWSE_BYTE_LIMIT", app, "mcp_browse_byte_limit", DefaultMCPBrowseByteLimit); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
 }
 
@@ -149,7 +182,7 @@ func loadJSONFile() (map[string]any, error) {
 		}
 		return nil, fmt.Errorf("error loading config file %s: %w", path, err)
 	}
-	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	var raw map[string]any
 	if err := dec.Decode(&raw); err != nil {

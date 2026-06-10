@@ -32,7 +32,8 @@ func clearEnv(t *testing.T) {
 		"KEYCLOAK_SSL_VERIFY", "APPS_BASE_URL", "APP_EXPOSER_BASE_URL", "PERMISSIONS_BASE_URL",
 		"USER_SUFFIX", "VICE_DOMAIN", "PATH_PREFIX", "VICE_URL_CHECK_TIMEOUT",
 		"VICE_URL_CHECK_RETRIES", "VICE_URL_CHECK_CACHE_TTL", "SERVICE_ACCOUNTS_ONLY",
-		"SERVICE_ACCOUNT_USERNAMES",
+		"SERVICE_ACCOUNT_USERNAMES", "MCP_ENABLED", "MCP_CLIENT_ID", "PUBLIC_BASE_URL",
+		"MCP_SCOPES", "MCP_LAUNCH_MAX_WAIT", "MCP_BROWSE_BYTE_LIMIT",
 	} {
 		t.Setenv(v, "")
 		_ = os.Unsetenv(v)
@@ -231,12 +232,70 @@ func TestLoad(t *testing.T) {
 			json:    "{not json",
 			wantErr: "error parsing JSON config file",
 		},
+		{
+			name: "mcp defaults and trailing slash trimmed",
+			json: minimalJSON,
+			env:  map[string]string{"PUBLIC_BASE_URL": "https://de.example.org/formation/"},
+			check: func(t *testing.T, cfg *Config) {
+				if !cfg.MCPEnabled {
+					t.Error("MCPEnabled = false, want true by default")
+				}
+				if cfg.PublicBaseURL != "https://de.example.org/formation" {
+					t.Errorf("PublicBaseURL = %q, want trailing slash trimmed", cfg.PublicBaseURL)
+				}
+				if cfg.MCPScopes != DefaultMCPScopes {
+					t.Errorf("MCPScopes = %q, want %q", cfg.MCPScopes, DefaultMCPScopes)
+				}
+				if cfg.MCPLaunchMaxWait != DefaultMCPLaunchMaxWait {
+					t.Errorf("MCPLaunchMaxWait = %v, want %v", cfg.MCPLaunchMaxWait, DefaultMCPLaunchMaxWait)
+				}
+				if cfg.MCPBrowseByteLimit != DefaultMCPBrowseByteLimit {
+					t.Errorf("MCPBrowseByteLimit = %d, want %d", cfg.MCPBrowseByteLimit, DefaultMCPBrowseByteLimit)
+				}
+			},
+		},
+		{
+			name: "mcp disabled skips required mcp values",
+			json: minimalJSON,
+			env:  map[string]string{"MCP_ENABLED": "false", "MCP_CLIENT_ID": "", "PUBLIC_BASE_URL": ""},
+			check: func(t *testing.T, cfg *Config) {
+				if cfg.MCPEnabled {
+					t.Error("MCPEnabled = true, want false")
+				}
+				if cfg.MCPClientID != "" || cfg.PublicBaseURL != "" {
+					t.Errorf("MCP values should stay empty when disabled, got %q %q", cfg.MCPClientID, cfg.PublicBaseURL)
+				}
+			},
+		},
+		{
+			name:    "missing mcp client id errors when enabled",
+			json:    minimalJSON,
+			env:     map[string]string{"MCP_CLIENT_ID": ""},
+			wantErr: "MCP_CLIENT_ID",
+		},
+		{
+			name: "mcp settings from JSON",
+			json: strings.Replace(minimalJSON, `"client_secret": "kcsecret"`,
+				`"client_secret": "kcsecret", "mcp_client_id": "json-mcp-client", "mcp_scopes": "openid"`, 1),
+			env: map[string]string{"MCP_CLIENT_ID": ""},
+			check: func(t *testing.T, cfg *Config) {
+				if cfg.MCPClientID != "json-mcp-client" {
+					t.Errorf("MCPClientID = %q, want json-mcp-client", cfg.MCPClientID)
+				}
+				if cfg.MCPScopes != "openid" {
+					t.Errorf("MCPScopes = %q, want openid", cfg.MCPScopes)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clearEnv(t)
 			writeConfig(t, tt.json)
+			// MCP is on by default and requires these; tests override as needed.
+			t.Setenv("MCP_CLIENT_ID", "formation-mcp")
+			t.Setenv("PUBLIC_BASE_URL", "https://de.example.org/formation")
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
@@ -264,6 +323,7 @@ func TestLoadMissingFileUsesEnvOnly(t *testing.T) {
 		"IRODS_PASSWORD": "p", "IRODS_ZONE": "z",
 		"KEYCLOAK_SERVER_URL": "https://kc/", "KEYCLOAK_REALM": "r",
 		"KEYCLOAK_CLIENT_ID": "c", "KEYCLOAK_CLIENT_SECRET": "s",
+		"MCP_CLIENT_ID": "m", "PUBLIC_BASE_URL": "https://de.example.org/formation",
 	} {
 		t.Setenv(k, v)
 	}

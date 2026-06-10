@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/labstack/echo/v4"
@@ -23,9 +24,15 @@ type Claims struct {
 	PreferredUsername *string `json:"preferred_username"`
 	Email             *string `json:"email"`
 	Name              *string `json:"name"`
+	Exp               int64   `json:"exp"`
 	RealmAccess       struct {
 		Roles []string `json:"roles"`
 	} `json:"realm_access"`
+}
+
+// Expiry returns the token expiration time from the exp claim.
+func (c *Claims) Expiry() time.Time {
+	return time.Unix(c.Exp, 0)
 }
 
 // IsServiceAccount reports whether the token belongs to a Keycloak service account.

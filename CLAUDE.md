@@ -34,7 +34,9 @@
 * internal/clients: apps and app-exposer HTTP clients.
 * internal/vice: VICE URL readiness checking and subdomain resolution.
 * internal/datastore: iRODS store behind the narrow Store interface.
-* internal/handlers: Echo handlers for all endpoints.
+* internal/datastore/datastoretest: shared in-memory fake Store for tests.
+* internal/handlers: Echo handlers for all endpoints; *_ops.go files hold the echo-free logic shared with the MCP tools.
+* internal/mcp: hosted MCP server at /mcp (tools, Keycloak bearer auth bridge, OAuth discovery metadata + DCR shim).
 
 # Other important projects
 * portal-conductor: Usually available at ../portal-conductor/. Provides an API for the portal.

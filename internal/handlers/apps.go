@@ -126,14 +126,11 @@ func (h *Apps) List(c echo.Context) error {
 
 	// Without client-side filters the apps service can paginate for us.
 	if !filters.active() {
-		response, err := h.apps.ListApps(ctx, username, limit, offset, search)
+		result, err := h.ListAppsPage(ctx, username, search, limit, offset)
 		if err != nil {
 			return err
 		}
-		return c.JSON(http.StatusOK, map[string]any{
-			"total": response["total"],
-			"apps":  formatApps(appsFromResponse(response), h.userSuffix),
-		})
+		return c.JSON(http.StatusOK, result)
 	}
 
 	// With filters, page through the full corpus before filtering so matches
@@ -182,24 +179,11 @@ func (h *Apps) Parameters(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	appID, err := validateUUID(c.Param("app_id"), "app_id")
+	result, err := h.AppParameters(c.Request().Context(), username, c.Param("system_id"), c.Param("app_id"))
 	if err != nil {
 		return err
 	}
-
-	appData, err := h.apps.GetApp(c.Request().Context(), c.Param("system_id"), appID, username)
-	if err != nil {
-		return err
-	}
-
-	groups, ok := appData["groups"]
-	if !ok {
-		groups = []any{}
-	}
-	return c.JSON(http.StatusOK, map[string]any{
-		"groups":           groups,
-		"overall_job_type": appData["overall_job_type"],
-	})
+	return c.JSON(http.StatusOK, result)
 }
 
 func appsFromResponse(response map[string]any) []map[string]any {

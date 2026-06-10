@@ -208,71 +208,22 @@ func (h *Data) Put(c echo.Context) error {
 		return err
 	}
 
-	if h.store.PathExists(irodsPath) {
-		if !h.store.UserCanWrite(username, irodsPath) {
-			return apierror.NewPermissionDenied("")
-		}
-
-		if hasContent {
-			if h.store.CollectionExists(irodsPath) {
-				return apierror.NewBadRequest("Cannot upload file - path is a directory")
-			}
-			if err := h.store.UploadFile(irodsPath, body); err != nil {
-				return err
-			}
-			if len(metadata) > 0 {
-				if err := h.store.SetMetadata(irodsPath, metadata, replaceMetadata); err != nil {
-					return err
-				}
-			}
-			return c.JSON(http.StatusOK, putResult(irodsPath, datastore.TypeDataObject, false))
-		}
-
-		// Metadata-only update on an existing file or collection.
-		resultType := datastore.TypeCollection
-		if h.store.FileExists(irodsPath) {
-			resultType = datastore.TypeDataObject
-		}
-		if err := h.store.SetMetadata(irodsPath, metadata, replaceMetadata); err != nil {
-			return err
-		}
-		return c.JSON(http.StatusOK, putResult(irodsPath, resultType, false))
-	}
-
-	// Path doesn't exist: create a new file or directory under an existing,
-	// writable parent.
-	parent := path.Dir(irodsPath)
-	if !h.store.PathExists(parent) {
-		return apierror.NewNotFound("Parent directory", parent)
-	}
-	if !h.store.UserCanWrite(username, parent) {
-		return apierror.NewPermissionDenied("")
-	}
-
+	var result map[string]any
 	switch {
 	case hasContent:
-		if err := h.store.UploadFile(irodsPath, body); err != nil {
-			return err
-		}
-		if len(metadata) > 0 {
-			if err := h.store.SetMetadata(irodsPath, metadata, replaceMetadata); err != nil {
-				return err
-			}
-		}
-		return c.JSON(http.StatusOK, putResult(irodsPath, datastore.TypeDataObject, true))
+		result, err = h.UploadFile(username, irodsPath, body, metadata, replaceMetadata)
+	case h.store.PathExists(irodsPath):
+		// Metadata-only update on an existing file or collection.
+		result, err = h.UpdateMetadata(username, irodsPath, metadata, replaceMetadata)
 	case c.QueryParam("resource_type") == "directory":
-		if err := h.store.CreateDirectory(irodsPath); err != nil {
-			return err
-		}
-		if len(metadata) > 0 {
-			if err := h.store.SetMetadata(irodsPath, metadata, replaceMetadata); err != nil {
-				return err
-			}
-		}
-		return c.JSON(http.StatusOK, putResult(irodsPath, datastore.TypeCollection, true))
+		result, err = h.MakeDirectory(username, irodsPath, metadata, replaceMetadata)
 	default:
 		return apierror.NewBadRequest("Cannot determine operation: provide file content or type=directory parameter")
 	}
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, result)
 }
 
 func putResult(irodsPath, resultType string, created bool) map[string]any {
@@ -360,47 +311,9 @@ func (h *Data) Delete(c echo.Context) error {
 		return err
 	}
 
-	if !h.store.PathExists(irodsPath) {
-		return apierror.NewNotFound("Path", irodsPath)
-	}
-	if !h.store.UserCanWrite(username, irodsPath) {
-		return apierror.NewPermissionDenied("")
-	}
-
-	result := map[string]any{
-		"path":         irodsPath,
-		"type":         datastore.TypeDataObject,
-		"would_delete": true,
-		"deleted":      !dryRun,
-		"dry_run":      dryRun,
-	}
-
-	isCollection := h.store.CollectionExists(irodsPath)
-	if isCollection {
-		result["type"] = datastore.TypeCollection
-		itemCount, err := h.store.CountCollectionItems(irodsPath)
-		if err != nil {
-			return err
-		}
-		// Unlike the Python version, the dry run reports the same error a
-		// real delete would, so the preview matches the outcome.
-		if !recurse && itemCount > 0 {
-			return apierror.NewBadRequest("Directory not empty. Use recurse=true to delete non-empty directories.")
-		}
-		if recurse && itemCount > 0 {
-			result["item_count"] = itemCount
-		}
-	}
-
-	if !dryRun {
-		if isCollection {
-			err = h.store.DeleteDirectory(irodsPath, recurse)
-		} else {
-			err = h.store.DeleteFile(irodsPath)
-		}
-		if err != nil {
-			return err
-		}
+	result, err := h.DeletePath(username, irodsPath, recurse, dryRun)
+	if err != nil {
+		return err
 	}
 	return c.JSON(http.StatusOK, result)
 }

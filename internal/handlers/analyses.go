@@ -39,27 +39,10 @@ func (h *Apps) ListAnalyses(c echo.Context) error {
 		status = c.QueryParam("status")
 	}
 
-	result, err := h.apps.ListAnalyses(c.Request().Context(), username, status)
+	analyses, err := h.AnalysesForUser(c.Request().Context(), username, status)
 	if err != nil {
 		return err
 	}
-
-	raw, _ := result["analyses"].([]any)
-	analyses := make([]map[string]any, 0, len(raw))
-	for _, item := range raw {
-		analysis, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		analyses = append(analyses, map[string]any{
-			"analysis_id": analysis["id"],
-			"name":        analysis["name"],
-			"app_id":      analysis["app_id"],
-			"system_id":   analysis["system_id"],
-			"status":      analysis["status"],
-		})
-	}
-
 	return c.JSON(http.StatusOK, map[string]any{"analyses": analyses})
 }
 
@@ -80,35 +63,9 @@ func (h *Apps) Status(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	rawAnalysisID := c.Param("analysis_id")
-	analysisID, err := validateUUID(rawAnalysisID, "analysis_id")
+	result, err := h.AnalysisStatus(c.Request().Context(), username, c.Param("analysis_id"))
 	if err != nil {
 		return err
-	}
-
-	ctx := c.Request().Context()
-	analysis, err := h.apps.GetAnalysis(ctx, analysisID, username)
-	if err != nil {
-		return err
-	}
-
-	subdomain := h.subdomains.Resolve(ctx, analysisID)
-	urlReady := false
-	var urlCheckDetails map[string]any
-	if subdomain != "" {
-		urlReady, urlCheckDetails = h.urls.Check(ctx, h.viceURL(subdomain))
-	}
-
-	result := map[string]any{
-		"analysis_id": rawAnalysisID,
-		"status":      valueOr(analysis, "status", "Unknown"),
-		"url_ready":   urlReady,
-	}
-	if subdomain != "" {
-		result["url"] = h.viceURL(subdomain)
-	}
-	if len(urlCheckDetails) > 0 {
-		result["url_check_details"] = urlCheckDetails
 	}
 	return c.JSON(http.StatusOK, result)
 }
@@ -127,32 +84,10 @@ func (h *Apps) Status(c echo.Context) error {
 // @Failure 400 {object} map[string]interface{} "Invalid operation or analysis ID"
 // @Router /apps/analyses/{analysis_id}/control [post]
 func (h *Apps) Control(c echo.Context) error {
-	operation := c.QueryParam("operation")
-	if operation != "extend_time" && operation != "save_and_exit" && operation != "exit" {
-		return apierror.NewValidation(
-			"Invalid operation. Must be one of: extend_time, save_and_exit, exit", "operation")
-	}
-
-	analysisID, err := validateUUID(c.Param("analysis_id"), "analysis_id")
+	result, err := h.ControlAnalysis(c.Request().Context(), c.Param("analysis_id"), c.QueryParam("operation"))
 	if err != nil {
 		return err
 	}
-
-	ctx := c.Request().Context()
-	var result map[string]any
-	switch operation {
-	case "extend_time":
-		result, err = h.exposer.ExtendTimeLimit(ctx, analysisID)
-	case "save_and_exit":
-		result, err = h.exposer.SaveAndExit(ctx, analysisID)
-	default:
-		result, err = h.exposer.ExitWithoutSave(ctx, analysisID)
-	}
-	if err != nil {
-		return err
-	}
-
-	result["operation"] = operation
 	return c.JSON(http.StatusOK, result)
 }
 
@@ -216,17 +151,12 @@ type LaunchSubmission struct {
 // @Router /app/launch/{system_id}/{app_id} [post]
 func (h *Apps) Launch(c echo.Context) error {
 	info := auth.GetInfo(c)
-	username, err := info.UsernameForBackend(h.serviceAccountUsernames)
-	if err != nil {
-		return err
-	}
 
 	outputZone := h.outputZone
 	if c.QueryParams().Has("output_zone") {
 		outputZone = c.QueryParam("output_zone")
 	}
 
-	systemID := c.Param("system_id")
 	appID := c.Param("app_id")
 	if _, err := validateUUID(appID, "app_id"); err != nil {
 		return err
@@ -237,24 +167,9 @@ func (h *Apps) Launch(c echo.Context) error {
 		return err
 	}
 
-	ctx := c.Request().Context()
-	prepared, email := h.prepareSubmission(ctx, submission, appID, systemID, info, username, outputZone)
-
-	response, err := h.apps.SubmitAnalysis(ctx, prepared, username, email)
+	result, err := h.LaunchAnalysis(c.Request().Context(), info, c.Param("system_id"), appID, outputZone, submission)
 	if err != nil {
 		return err
-	}
-
-	result := map[string]any{
-		"analysis_id": response["id"],
-		"name":        valueOr(response, "name", valueOr(prepared, "name", "Unnamed")),
-		"status":      valueOr(response, "status", "Submitted"),
-	}
-
-	if analysisID, ok := response["id"].(string); ok && analysisID != "" {
-		if subdomain := h.subdomains.Resolve(ctx, analysisID); subdomain != "" {
-			result["url"] = h.viceURL(subdomain)
-		}
 	}
 	return c.JSON(http.StatusOK, result)
 }

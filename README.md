@@ -14,6 +14,7 @@ Formation is a Go service that provides authenticated access to CyVerse Discover
 - **Pagination**: Support for offset/limit parameters when reading large files and listing apps
 - **Permission Checking**: Validates user read/write permissions before granting access
 - **Advanced Filtering**: Filter apps by name, description, integrator, job type, and date ranges
+- **MCP Server**: Hosted Model Context Protocol server at `/mcp` with OAuth 2.1 (PKCE) login via Keycloak (see [MCP Server](#mcp-server))
 
 ## Requirements
 
@@ -64,6 +65,8 @@ The config file path defaults to `config.json` in the working directory and can 
     "realm": "cyverse",
     "client_id": "formation",
     "client_secret": "changeme",
+    "mcp_client_id": "formation-mcp",
+    "mcp_scopes": "openid profile email",
     "ssl_verify": true
   },
   "services": {
@@ -75,6 +78,10 @@ The config file path defaults to `config.json` in the working directory and can 
     "user_suffix": "@iplantcollaborative.org",
     "vice_domain": ".cyverse.run",
     "path_prefix": "/formation",
+    "public_base_url": "https://de.example.org/formation",
+    "mcp_enabled": true,
+    "mcp_launch_max_wait": 540,
+    "mcp_browse_byte_limit": 1048576,
     "vice_url_check_timeout": 5.0,
     "vice_url_check_retries": 3,
     "vice_url_check_cache_ttl": 5.0,
@@ -100,6 +107,8 @@ The config file path defaults to `config.json` in the working directory and can 
 - `realm`: Keycloak realm name
 - `client_id`: OAuth2 client ID
 - `client_secret`: OAuth2 client secret
+- `mcp_client_id`: Public (no-secret) Keycloak client shared by all MCP users; required when the MCP server is enabled (env: `MCP_CLIENT_ID`)
+- `mcp_scopes`: Space-separated scopes advertised in the MCP OAuth metadata (default: `openid profile email`, env: `MCP_SCOPES`)
 - `ssl_verify`: Enable SSL verification (default: true)
 
 **services**: Backend service URLs
@@ -111,6 +120,10 @@ The config file path defaults to `config.json` in the working directory and can 
 - `user_suffix`: Username suffix to strip from integrator usernames
 - `vice_domain`: Domain suffix for VICE applications
 - `path_prefix`: URL path prefix stripped from incoming requests when present (the gateway forwards paths like `/formation/apps` unrewritten); all routes also serve at `/`
+- `public_base_url`: Formation's externally visible base URL including the path prefix (e.g. `https://de.cyverse.org/formation`); required when the MCP server is enabled and used to build the OAuth resource identifier and discovery documents (env: `PUBLIC_BASE_URL`)
+- `mcp_enabled`: Mount the MCP server at `/mcp` (default: true, env: `MCP_ENABLED`)
+- `mcp_launch_max_wait`: Hard cap in seconds on `launch_app_and_wait`'s `max_wait` (default: 540); keep it below the gateway's idle timeout
+- `mcp_browse_byte_limit`: Maximum bytes the `browse_data` tool reads from a file (default: 1048576)
 - `vice_url_check_timeout`: Timeout for VICE URL checks in seconds
 - `vice_url_check_retries`: Number of retries for VICE URL checks
 - `vice_url_check_cache_ttl`: Cache TTL for VICE URL check results in seconds
@@ -137,6 +150,71 @@ See [API Endpoints Documentation](docs/API_ENDPOINTS.md) for detailed endpoint d
 - Analyses (`/apps/analyses`)
 - File System Operations (`/data`)
 - Response formats
+
+## MCP Server
+
+Formation hosts a [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp`
+(streamable HTTP transport, stateless), replacing the retired stdio-based
+[formation-mcp](https://github.com/cyverse-de/formation-mcp) project. MCP clients such as
+Claude Code and Claude.ai connectors authenticate with the OAuth 2.1 authorization code flow
+(PKCE) against the existing Keycloak realm, using a single shared **public** client.
+
+```bash
+# Claude Code
+claude mcp add --transport http formation https://de.example.org/formation/mcp
+```
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_apps` | List available applications, optionally filtered by name |
+| `get_app_parameters` | Get an app's parameters, types, and defaults |
+| `launch_app_and_wait` | Launch an app; for VICE apps, wait for the URL to become ready. Reports missing required parameters instead of launching blind |
+| `get_analysis_status` | Check an analysis's status and VICE URL readiness |
+| `list_running_analyses` | List the user's running analyses |
+| `stop_analysis` | Stop an analysis, optionally saving outputs |
+| `browse_data` | List an iRODS directory or read a file |
+| `create_directory` | Create an iRODS collection with optional metadata |
+| `upload_file` | Upload text content to an iRODS path with optional metadata |
+| `set_metadata` | Set or replace AVU metadata on a path |
+| `delete_data` | Delete a file or directory, with dry-run support |
+
+The Python server's `open_in_browser` tool was dropped: a hosted server cannot open a local
+browser, and the launch/status tools already return the VICE URL as a link.
+
+### OAuth discovery
+
+Unauthenticated requests to `/mcp` get a `401` with a `WWW-Authenticate` header pointing at
+the RFC 9728 protected resource metadata. From there, clients discover the authorization
+server metadata (an RFC 8414 facade whose authorize/token endpoints are Keycloak's real realm
+endpoints) and a dynamic client registration shim (`POST /oauth/register`) that accepts any
+registration and always returns the shared public `mcp_client_id`, so no per-user client
+setup is needed. Nothing is stored; Keycloak validates redirect URIs at authorization time.
+
+Discovery documents are served at the prefixed and bare paths (e.g.
+`/formation/.well-known/oauth-protected-resource/mcp`) as well as the RFC root forms
+(e.g. `/.well-known/oauth-protected-resource/formation/mcp`). The root forms require gateway
+rules routing `/.well-known/{oauth-protected-resource,oauth-authorization-server,openid-configuration}/formation*`
+to formation; clients that follow the `WWW-Authenticate` header (including the Claude family)
+work without them.
+
+### Keycloak setup
+
+Create a public client in the realm (suggested id `formation-mcp`):
+
+1. **Client authentication:** off (public client). **Standard flow:** on. **Direct access grants:** off.
+2. **Advanced settings → Proof Key for Code Exchange:** `S256`.
+3. **Valid redirect URIs:** `https://claude.ai/api/mcp/auth_callback`,
+   `https://claude.com/api/mcp/auth_callback`, plus local-client callbacks. Claude Code uses a
+   random localhost port, which needs the prefix wildcard `http://localhost*` — note that this
+   is broad; enumerate exact URIs instead if your policy requires it. The registration shim
+   logs every redirect URI clients ask for, to help maintain this list.
+4. **Web origins:** `+` (or explicit origins).
+
+Authorization at `/mcp` mirrors the REST API: any valid realm token is accepted, the
+apps/analysis tools require the `app-runner` realm role for service accounts, and the data
+tools act as the token's user.
 
 ## Development
 

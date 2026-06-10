@@ -26,6 +26,7 @@ import (
 	"github.com/cyverse-de/formation/internal/config"
 	"github.com/cyverse-de/formation/internal/datastore"
 	"github.com/cyverse-de/formation/internal/handlers"
+	mcpserver "github.com/cyverse-de/formation/internal/mcp"
 	"github.com/cyverse-de/formation/internal/vice"
 )
 
@@ -159,6 +160,16 @@ func buildServer(cfg *config.Config) (*echo.Echo, func(), error) {
 	e.GET("/data/*", data.Get, requireUser)
 	e.PUT("/data/*", data.Put, requireUser)
 	e.DELETE("/data/*", data.Delete, requireUser)
+
+	if cfg.MCPEnabled {
+		mcpHandler := mcpserver.Handler(mcpserver.Deps{Apps: apps, Data: data, Cfg: cfg}, verifier)
+		// POST carries JSON-RPC; GET and DELETE are part of the streamable
+		// HTTP transport. The SDK answers its own errors, so the FastAPI-style
+		// error handler stays out of the MCP path.
+		e.Any("/mcp", echo.WrapHandler(mcpHandler))
+		mcpserver.RegisterWellKnown(e, cfg)
+		log.Infof("MCP server mounted at /mcp (resource %s/mcp, shared client %s)", cfg.PublicBaseURL, cfg.MCPClientID)
+	}
 
 	return e, store.Release, nil
 }
