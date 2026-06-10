@@ -1,55 +1,42 @@
 # Formation
 
-Formation is a FastAPI-based service that provides authenticated access to iRODS data storage with integrated Keycloak authentication. It serves as a bridge between web applications and iRODS file systems, offering RESTful APIs for file browsing, content retrieval, and metadata access.
+Formation is a Go service that provides authenticated access to CyVerse Discovery Environment apps and iRODS data storage with integrated Keycloak authentication. It serves as a bridge between web applications and the DE backend services, offering RESTful APIs for app discovery and launching, analysis management, file browsing, content retrieval, and metadata access.
 
 ## Features
 
 - **Authentication**: Secure login via Keycloak OIDC with JWT token support
 - **Service Account Support**: Service-to-service authentication with enforced role-based access control (requires "app-runner" role)
 - **Interactive Apps**: List and filter VICE (Visual Interactive Computing Environment) applications accessible to authenticated users
-- **File System Access**: Browse iRODS collections and retrieve file contents
-- **Metadata Support**: Access iRODS AVU (Attribute-Value-Unit) metadata as HTTP headers
+- **App Launching**: Submit analyses and control running VICE analyses (extend time, save and exit, exit)
+- **File System Access**: Browse iRODS collections and stream file contents
+- **Metadata Support**: Access and set iRODS AVU (Attribute-Value-Unit) metadata as HTTP headers
 - **Content Type Detection**: Automatic MIME type detection for file responses
-- **Asynchronous Operations**: Concurrent metadata retrieval and content type detection for improved performance
-- **Pagination**: Support for offset/limit parameters when reading large files
-- **Permission Checking**: Validates user read permissions before granting access
-- **Advanced Filtering**: Filter apps by name, description, integrator, and date ranges
+- **Pagination**: Support for offset/limit parameters when reading large files and listing apps
+- **Permission Checking**: Validates user read/write permissions before granting access
+- **Advanced Filtering**: Filter apps by name, description, integrator, job type, and date ranges
+- **MCP Server**: Hosted Model Context Protocol server at `/mcp` with OAuth 2.1 (PKCE) login via Keycloak (see [MCP Server](#mcp-server))
 
 ## Requirements
 
-- Python 3.13+
-- [uv](https://docs.astral.sh/uv/) - Fast Python package manager
+- Go 1.25+
 - iRODS server access
 - Keycloak server for authentication
-- PostgreSQL database
+- apps and app-exposer services
 
 ### Development Requirements
 
-- [jq](https://jqlang.github.io/jq/) - Command-line JSON processor (for hooks)
-- [ruff](https://docs.astral.sh/ruff/) - Fast Python linter and formatter (installed via uv)
+- [golangci-lint](https://golangci-lint.run/) - Go linter aggregator
 
-## Installation
-
-This project uses [uv](https://docs.astral.sh/uv/) as the package manager for fast, reliable dependency management.
-
-### Installing uv
+## Building
 
 ```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Or using pip
-pip install uv
+go build ./cmd/formation
 ```
 
-### Project Setup
+A container image can be built with the multi-stage `Dockerfile`:
 
 ```bash
-# Install dependencies and create virtual environment
-uv sync
-
-# Activate virtual environment (optional - uv run handles this automatically)
-source .venv/bin/activate
+./build.sh --runtime podman
 ```
 
 ## Configuration
@@ -60,6 +47,8 @@ Formation is configured via a JSON configuration file. Copy `config.example.json
 cp config.example.json config.json
 ```
 
+The config file path defaults to `config.json` in the working directory and can be overridden with the `CONFIG_FILE` environment variable. Every setting can also be overridden by an environment variable (e.g. `IRODS_HOST`, `KEYCLOAK_SERVER_URL`, `APPS_BASE_URL`); environment variables take precedence over the config file.
+
 ### Configuration File Structure
 
 ```json
@@ -69,13 +58,16 @@ cp config.example.json config.json
     "port": "1247",
     "user": "rods",
     "password": "changeme",
-    "zone": "iplant"
+    "zone": "iplant",
+    "cache_ttl": 0
   },
   "keycloak": {
     "server_url": "https://keycloak.example.com",
     "realm": "cyverse",
     "client_id": "formation",
     "client_secret": "changeme",
+    "mcp_client_id": "formation-mcp",
+    "mcp_scopes": "openid profile email",
     "ssl_verify": true
   },
   "services": {
@@ -87,6 +79,10 @@ cp config.example.json config.json
     "user_suffix": "@iplantcollaborative.org",
     "vice_domain": ".cyverse.run",
     "path_prefix": "/formation",
+    "public_base_url": "https://de.example.org/formation",
+    "mcp_enabled": true,
+    "mcp_launch_max_wait": 540,
+    "mcp_browse_byte_limit": 1048576,
     "vice_url_check_timeout": 5.0,
     "vice_url_check_retries": 3,
     "vice_url_check_cache_ttl": 5.0,
@@ -106,23 +102,30 @@ cp config.example.json config.json
 - `user`: iRODS username for service account
 - `password`: iRODS password
 - `zone`: iRODS zone name
+- `cache_ttl`: iRODS client metadata cache lifetime in seconds (default: 0, caching disabled). Leave disabled when running more than one replica — a cached (or cached-negative) entry on one replica hides writes made through another until it expires (env: `IRODS_CACHE_TTL`)
 
 **keycloak**: Keycloak authentication settings
 - `server_url`: Keycloak server URL
 - `realm`: Keycloak realm name
 - `client_id`: OAuth2 client ID
 - `client_secret`: OAuth2 client secret
+- `mcp_client_id`: Public (no-secret) Keycloak client shared by all MCP users; required when the MCP server is enabled (env: `MCP_CLIENT_ID`)
+- `mcp_scopes`: Space-separated scopes advertised in the MCP OAuth metadata (default: `openid profile email`, env: `MCP_SCOPES`)
 - `ssl_verify`: Enable SSL verification (default: true)
 
 **services**: Backend service URLs
 - `apps_base_url`: Base URL of apps service
 - `app_exposer_base_url`: Base URL of app-exposer service
-- `permissions_base_url`: Base URL of permissions service
+- `permissions_base_url`: Base URL of permissions service (parsed for compatibility; unused)
 
 **application**: Application behavior settings
 - `user_suffix`: Username suffix to strip from integrator usernames
 - `vice_domain`: Domain suffix for VICE applications
-- `path_prefix`: URL path prefix for the service
+- `path_prefix`: URL path prefix stripped from incoming requests when present (the gateway forwards paths like `/formation/apps` unrewritten); all routes also serve at `/`
+- `public_base_url`: Formation's externally visible base URL including the path prefix (e.g. `https://de.cyverse.org/formation`); required when the MCP server is enabled and used to build the OAuth resource identifier and discovery documents (env: `PUBLIC_BASE_URL`)
+- `mcp_enabled`: Mount the MCP server at `/mcp` (default: true, env: `MCP_ENABLED`)
+- `mcp_launch_max_wait`: Hard cap in seconds on `launch_app_and_wait`'s `max_wait` (default: 540); keep it below the gateway's idle timeout
+- `mcp_browse_byte_limit`: Maximum bytes the `browse_data` tool reads from a file (default: 1048576)
 - `vice_url_check_timeout`: Timeout for VICE URL checks in seconds
 - `vice_url_check_retries`: Number of retries for VICE URL checks
 - `vice_url_check_cache_ttl`: Cache TTL for VICE URL check results in seconds
@@ -134,121 +137,139 @@ cp config.example.json config.json
 ### Starting the Server
 
 ```bash
-# Development mode with auto-reload (recommended for local development)
-uv run fastapi dev main.py
+# Default port 8000
+go run ./cmd/formation
 
-# Production mode
-uv run fastapi run main.py
-
-# Custom host and port
-uv run fastapi dev main.py --host 0.0.0.0 --port 8080
-
-# Alternative: activate venv manually then run
-source .venv/bin/activate
-fastapi dev main.py
+# Custom port and log level
+go run ./cmd/formation --listen-port 8080 --log-level debug
 ```
 
 ### API Endpoints
 
 See [API Endpoints Documentation](docs/API_ENDPOINTS.md) for detailed endpoint documentation including:
 - Authentication (login, service accounts)
-- Interactive Applications (`/apps`)
-- File System Operations (`/data/browse`)
+- Applications (`/apps`, `/app/launch`)
+- Analyses (`/apps/analyses`)
+- File System Operations (`/data`)
 - Response formats
+
+## MCP Server
+
+Formation hosts a [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp`
+(streamable HTTP transport, stateless), replacing the retired stdio-based
+[formation-mcp](https://github.com/cyverse-de/formation-mcp) project. MCP clients such as
+Claude Code and Claude.ai connectors authenticate with the OAuth 2.1 authorization code flow
+(PKCE) against the existing Keycloak realm, using a single shared **public** client.
+
+```bash
+# Claude Code
+claude mcp add --transport http formation https://de.example.org/formation/mcp
+```
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_apps` | List available applications, optionally filtered by name |
+| `get_app_parameters` | Get an app's parameters, types, and defaults |
+| `launch_app_and_wait` | Launch an app; for VICE apps, wait for the URL to become ready. Reports missing required parameters instead of launching blind |
+| `get_analysis_status` | Check an analysis's status and VICE URL readiness |
+| `list_running_analyses` | List the user's running analyses |
+| `stop_analysis` | Stop an analysis, optionally saving outputs |
+| `browse_data` | List an iRODS directory or read a file |
+| `create_directory` | Create an iRODS collection with optional metadata |
+| `upload_file` | Upload text content to an iRODS path with optional metadata |
+| `set_metadata` | Set or replace AVU metadata on a path |
+| `delete_data` | Delete a file or directory, with dry-run support |
+
+The Python server's `open_in_browser` tool was dropped: a hosted server cannot open a local
+browser, and the launch/status tools already return the VICE URL as a link.
+
+### OAuth discovery
+
+Unauthenticated requests to `/mcp` get a `401` with a `WWW-Authenticate` header pointing at
+the RFC 9728 protected resource metadata. From there, clients discover the authorization
+server metadata (an RFC 8414 facade whose authorize/token endpoints are Keycloak's real realm
+endpoints) and a dynamic client registration shim (`POST /oauth/register`) that accepts any
+registration and always returns the shared public `mcp_client_id`, so no per-user client
+setup is needed. Nothing is stored; Keycloak validates redirect URIs at authorization time.
+
+Discovery documents are served at the prefixed and bare paths (e.g.
+`/formation/.well-known/oauth-protected-resource/mcp`) as well as the RFC root forms
+(e.g. `/.well-known/oauth-protected-resource/formation/mcp`). The root forms require gateway
+rules routing `/.well-known/{oauth-protected-resource,oauth-authorization-server,openid-configuration}/formation*`
+to formation; clients that follow the `WWW-Authenticate` header (including the Claude family)
+work without them.
+
+### Keycloak setup
+
+Create a public client in the realm (suggested id `formation-mcp`):
+
+1. **Client authentication:** off (public client). **Standard flow:** on. **Direct access grants:** off.
+2. **Advanced settings → Proof Key for Code Exchange:** `S256`.
+3. **Valid redirect URIs:** `https://claude.ai/api/mcp/auth_callback`,
+   `https://claude.com/api/mcp/auth_callback`, plus local-client callbacks. Claude Code uses a
+   random localhost port, which needs the prefix wildcard `http://localhost*` — note that this
+   is broad; enumerate exact URIs instead if your policy requires it. The registration shim
+   logs every redirect URI clients ask for, to help maintain this list.
+4. **Web origins:** `+` (or explicit origins).
+
+Authorization at `/mcp` mirrors the REST API: any valid realm token is accepted, the
+apps/analysis tools require the `app-runner` realm role for service accounts, and the data
+tools act as the token's user.
 
 ## Development
 
-### Prerequisites
-
-Development tools required:
-
-```bash
-# Install jq (for automated hooks)
-# macOS
-brew install jq
-
-# Ubuntu/Debian
-sudo apt-get install jq
-
-# Fedora/RHEL
-sudo dnf install jq
-
-# Ruff is automatically installed via uv sync
-# but can also be installed globally:
-uv tool install ruff
-```
-
 ### Code Style
 
-The project uses [ruff](https://docs.astral.sh/ruff/) for linting and formatting:
+The project uses standard Go tooling:
 
 ```bash
-# Format and lint code
-uv run ruff format
-uv run ruff check --fix
+# Format code
+gofmt -w .
 
-# Check for issues without fixing
-uv run ruff check
+# Lint
+golangci-lint run ./...
 
-# Format specific files
-uv run ruff check --fix routes/apps.py
-```
-
-### Automated Linting (Optional)
-
-For automatic linting after file edits, see `.claude/hooks-example.md` for Claude Code hook configuration. This requires `jq` to be installed.
-
-### Working with uv
-
-```bash
-# Add new dependencies
-uv add package-name
-
-# Add development dependencies
-uv add --dev package-name
-
-# Update dependencies
-uv sync --upgrade
-
-# Run scripts with uv (automatically handles virtual environment)
-uv run python main.py
-uv run pytest
+# Vet
+go vet ./...
 ```
 
 ### Testing
 
 ```bash
 # Run all tests
-uv run pytest
+go test ./...
 
-# Run specific test file
-uv run pytest tests/test_interactive_apps.py
+# Run tests for one package
+go test ./internal/handlers/
 
-# Run with verbose output
-uv run pytest -v
-
-# Run with coverage
-uv run pytest --cov=. --cov-report=html
+# Run tests matching a pattern
+go test -run TestLaunch ./internal/handlers/
 ```
 
-See [Testing Documentation](docs/TESTING.md) for comprehensive testing information.
+## History
+
+Formation was originally implemented in Python with FastAPI and rewritten in Go as a drop-in replacement: the REST API, response shapes, and configuration are unchanged. Intentional behavior improvements over the Python version:
+
+- `GET /data` streams file contents instead of buffering whole files in memory.
+- `PUT /data` with `replace_metadata=true` replaces only the AVU attributes being set, preserving unrelated AVUs (including system attributes such as `ipc_UUID`).
+- `DELETE /data` dry runs report the same error a real delete would for non-empty directories without `recurse=true`.
+- `GET /apps` uses real upstream pagination, so results are no longer truncated at 1000 apps when filtering.
+
+Small mechanical differences from FastAPI: malformed query parameters return `400` with a `{"detail": ...}` body instead of pydantic's `422` validation arrays, an invalid date filter returns `400` instead of an unhandled `500`, and `GET /apps/analyses` (without the trailing slash) is served directly instead of being redirected. Health checks should use `/` rather than `/docs`.
 
 ## Documentation
 
 - [API Endpoints](docs/API_ENDPOINTS.md) - Complete API endpoint reference
-- [Interactive Apps Endpoint](docs/INTERACTIVE_APPS_ENDPOINT.md) - Detailed documentation for the `/apps` endpoint
 - [Date Filtering](docs/DATE_FILTERING.md) - Date filter syntax and usage examples
-- [Implementation Status](docs/IMPLEMENTATION_STATUS.md) - Current implementation status and roadmap
-- [Testing Guide](docs/TESTING.md) - Testing approach and guidelines
 
 ## API Documentation
 
-Interactive API documentation is available when the server is running:
+Interactive Swagger UI is available at `/docs` when the server is running (e.g. `http://localhost:8000/docs`). To authenticate in the UI: open the Authorize dialog, fill in the BasicAuth username/password, execute `POST /login`, then paste the returned `access_token` into the BearerAuth value as `Bearer <token>`.
 
-- **Swagger UI**: `http://localhost:8000/docs`
-- **ReDoc**: `http://localhost:8000/redoc`
+The OpenAPI spec is generated from [swaggo/swag](https://github.com/swaggo/swag) annotations on the handlers into the committed `apidocs` package. After changing annotations, regenerate with:
 
-The API documentation is organized into three main categories:
-- **Authentication** - User authentication and session management
-- **Apps** - App discovery, job submission, and lifecycle management
-- **Data Store** - iRODS file system operations and metadata access
+```bash
+go run github.com/swaggo/swag/cmd/swag@latest init -g cmd/formation/main.go -o apidocs --outputTypes go,json
+```

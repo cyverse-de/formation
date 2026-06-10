@@ -4,13 +4,16 @@
     "port": "1247",
     "user": "rods",
     "password": "changeme",
-    "zone": "iplant"
+    "zone": "iplant",
+    "cache_ttl": 0
   },
   "keycloak": {
     "server_url": "https://keycloak.example.com",
     "realm": "cyverse",
     "client_id": "formation",
     "client_secret": "changeme",
+    "mcp_client_id": "formation-mcp",
+    "mcp_scopes": "openid profile email",
     "ssl_verify": true
   },
   "services": {
@@ -22,6 +25,10 @@
     "user_suffix": "@iplantcollaborative.org",
     "vice_domain": ".cyverse.run",
     "path_prefix": "/formation",
+    "public_base_url": "https://de.example.org/formation",
+    "mcp_enabled": true,
+    "mcp_launch_max_wait": 540,
+    "mcp_browse_byte_limit": 1048576,
     "vice_url_check_timeout": 5.0,
     "vice_url_check_retries": 3,
     "vice_url_check_cache_ttl": 5.0,
