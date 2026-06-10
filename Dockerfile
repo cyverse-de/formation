@@ -1,37 +1,27 @@
-# Adapted from https://github.com/astral-sh/uv-docker-example/blob/main/Dockerfile
+### Build stage
+FROM golang:1.25 AS builder
 
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+WORKDIR /build
 
-WORKDIR /app
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
+RUN go mod download
 
-ENV UV_LINK_MODE=copy
+# Copy source code
+COPY . .
 
-# Install system dependencies
-RUN apt update -y
-RUN apt install -y --no-install-recommends libsasl2-dev
-RUN apt install -y --no-install-recommends python3-dev
-RUN apt install -y --no-install-recommends libldap2-dev
-RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+# Build the binary; let the build platform determine GOOS/GOARCH.
+ENV CGO_ENABLED=0
 
-# Copy dependency files first for better caching
-COPY uv.lock pyproject.toml ./
+RUN go build -ldflags='-w -s' -o formation ./cmd/formation
 
-# Install dependencies without the project itself
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-install-project --no-dev
+### Final stage - minimal runtime image
+FROM gcr.io/distroless/static-debian12:nonroot
 
-# Copy the entire project
-COPY . /app
+WORKDIR /
 
-# Install the project itself
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev
+COPY --from=builder /build/formation /formation
 
-# Set PATH to include virtual environment
-ENV PATH="/app/.venv/bin:$PATH"
-
-# Expose port
 EXPOSE 8000
 
-# Run the application
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["/formation"]

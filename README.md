@@ -1,55 +1,41 @@
 # Formation
 
-Formation is a FastAPI-based service that provides authenticated access to iRODS data storage with integrated Keycloak authentication. It serves as a bridge between web applications and iRODS file systems, offering RESTful APIs for file browsing, content retrieval, and metadata access.
+Formation is a Go service that provides authenticated access to CyVerse Discovery Environment apps and iRODS data storage with integrated Keycloak authentication. It serves as a bridge between web applications and the DE backend services, offering RESTful APIs for app discovery and launching, analysis management, file browsing, content retrieval, and metadata access.
 
 ## Features
 
 - **Authentication**: Secure login via Keycloak OIDC with JWT token support
 - **Service Account Support**: Service-to-service authentication with enforced role-based access control (requires "app-runner" role)
 - **Interactive Apps**: List and filter VICE (Visual Interactive Computing Environment) applications accessible to authenticated users
-- **File System Access**: Browse iRODS collections and retrieve file contents
-- **Metadata Support**: Access iRODS AVU (Attribute-Value-Unit) metadata as HTTP headers
+- **App Launching**: Submit analyses and control running VICE analyses (extend time, save and exit, exit)
+- **File System Access**: Browse iRODS collections and stream file contents
+- **Metadata Support**: Access and set iRODS AVU (Attribute-Value-Unit) metadata as HTTP headers
 - **Content Type Detection**: Automatic MIME type detection for file responses
-- **Asynchronous Operations**: Concurrent metadata retrieval and content type detection for improved performance
-- **Pagination**: Support for offset/limit parameters when reading large files
-- **Permission Checking**: Validates user read permissions before granting access
-- **Advanced Filtering**: Filter apps by name, description, integrator, and date ranges
+- **Pagination**: Support for offset/limit parameters when reading large files and listing apps
+- **Permission Checking**: Validates user read/write permissions before granting access
+- **Advanced Filtering**: Filter apps by name, description, integrator, job type, and date ranges
 
 ## Requirements
 
-- Python 3.13+
-- [uv](https://docs.astral.sh/uv/) - Fast Python package manager
+- Go 1.25+
 - iRODS server access
 - Keycloak server for authentication
-- PostgreSQL database
+- apps and app-exposer services
 
 ### Development Requirements
 
-- [jq](https://jqlang.github.io/jq/) - Command-line JSON processor (for hooks)
-- [ruff](https://docs.astral.sh/ruff/) - Fast Python linter and formatter (installed via uv)
+- [golangci-lint](https://golangci-lint.run/) - Go linter aggregator
 
-## Installation
-
-This project uses [uv](https://docs.astral.sh/uv/) as the package manager for fast, reliable dependency management.
-
-### Installing uv
+## Building
 
 ```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Or using pip
-pip install uv
+go build ./cmd/formation
 ```
 
-### Project Setup
+A container image can be built with the multi-stage `Dockerfile`:
 
 ```bash
-# Install dependencies and create virtual environment
-uv sync
-
-# Activate virtual environment (optional - uv run handles this automatically)
-source .venv/bin/activate
+./build.sh --runtime podman
 ```
 
 ## Configuration
@@ -59,6 +45,8 @@ Formation is configured via a JSON configuration file. Copy `config.example.json
 ```bash
 cp config.example.json config.json
 ```
+
+The config file path defaults to `config.json` in the working directory and can be overridden with the `CONFIG_FILE` environment variable. Every setting can also be overridden by an environment variable (e.g. `IRODS_HOST`, `KEYCLOAK_SERVER_URL`, `APPS_BASE_URL`); environment variables take precedence over the config file.
 
 ### Configuration File Structure
 
@@ -117,12 +105,12 @@ cp config.example.json config.json
 **services**: Backend service URLs
 - `apps_base_url`: Base URL of apps service
 - `app_exposer_base_url`: Base URL of app-exposer service
-- `permissions_base_url`: Base URL of permissions service
+- `permissions_base_url`: Base URL of permissions service (parsed for compatibility; unused)
 
 **application**: Application behavior settings
 - `user_suffix`: Username suffix to strip from integrator usernames
 - `vice_domain`: Domain suffix for VICE applications
-- `path_prefix`: URL path prefix for the service
+- `path_prefix`: URL path prefix for the service (proxy metadata only; routes serve at `/`)
 - `vice_url_check_timeout`: Timeout for VICE URL checks in seconds
 - `vice_url_check_retries`: Number of retries for VICE URL checks
 - `vice_url_check_cache_ttl`: Cache TTL for VICE URL check results in seconds
@@ -134,121 +122,65 @@ cp config.example.json config.json
 ### Starting the Server
 
 ```bash
-# Development mode with auto-reload (recommended for local development)
-uv run fastapi dev main.py
+# Default port 8000
+go run ./cmd/formation
 
-# Production mode
-uv run fastapi run main.py
-
-# Custom host and port
-uv run fastapi dev main.py --host 0.0.0.0 --port 8080
-
-# Alternative: activate venv manually then run
-source .venv/bin/activate
-fastapi dev main.py
+# Custom port and log level
+go run ./cmd/formation --listen-port 8080 --log-level debug
 ```
 
 ### API Endpoints
 
 See [API Endpoints Documentation](docs/API_ENDPOINTS.md) for detailed endpoint documentation including:
 - Authentication (login, service accounts)
-- Interactive Applications (`/apps`)
-- File System Operations (`/data/browse`)
+- Applications (`/apps`, `/app/launch`)
+- Analyses (`/apps/analyses`)
+- File System Operations (`/data`)
 - Response formats
 
 ## Development
 
-### Prerequisites
-
-Development tools required:
-
-```bash
-# Install jq (for automated hooks)
-# macOS
-brew install jq
-
-# Ubuntu/Debian
-sudo apt-get install jq
-
-# Fedora/RHEL
-sudo dnf install jq
-
-# Ruff is automatically installed via uv sync
-# but can also be installed globally:
-uv tool install ruff
-```
-
 ### Code Style
 
-The project uses [ruff](https://docs.astral.sh/ruff/) for linting and formatting:
+The project uses standard Go tooling:
 
 ```bash
-# Format and lint code
-uv run ruff format
-uv run ruff check --fix
+# Format code
+gofmt -w .
 
-# Check for issues without fixing
-uv run ruff check
+# Lint
+golangci-lint run ./...
 
-# Format specific files
-uv run ruff check --fix routes/apps.py
-```
-
-### Automated Linting (Optional)
-
-For automatic linting after file edits, see `.claude/hooks-example.md` for Claude Code hook configuration. This requires `jq` to be installed.
-
-### Working with uv
-
-```bash
-# Add new dependencies
-uv add package-name
-
-# Add development dependencies
-uv add --dev package-name
-
-# Update dependencies
-uv sync --upgrade
-
-# Run scripts with uv (automatically handles virtual environment)
-uv run python main.py
-uv run pytest
+# Vet
+go vet ./...
 ```
 
 ### Testing
 
 ```bash
 # Run all tests
-uv run pytest
+go test ./...
 
-# Run specific test file
-uv run pytest tests/test_interactive_apps.py
+# Run tests for one package
+go test ./internal/handlers/
 
-# Run with verbose output
-uv run pytest -v
-
-# Run with coverage
-uv run pytest --cov=. --cov-report=html
+# Run tests matching a pattern
+go test -run TestLaunch ./internal/handlers/
 ```
 
-See [Testing Documentation](docs/TESTING.md) for comprehensive testing information.
+## History
+
+Formation was originally implemented in Python with FastAPI and rewritten in Go as a drop-in replacement: the REST API, response shapes, and configuration are unchanged. Intentional behavior improvements over the Python version:
+
+- `GET /data` streams file contents instead of buffering whole files in memory.
+- `PUT /data` with `replace_metadata=true` replaces only the AVU attributes being set, preserving unrelated AVUs (including system attributes such as `ipc_UUID`).
+- `DELETE /data` dry runs report the same error a real delete would for non-empty directories without `recurse=true`.
+- `GET /apps` uses real upstream pagination, so results are no longer truncated at 1000 apps when filtering.
+
+Small mechanical differences from FastAPI: malformed query parameters return `400` with a `{"detail": ...}` body instead of pydantic's `422` validation arrays, an invalid date filter returns `400` instead of an unhandled `500`, and `GET /apps/analyses` (without the trailing slash) is served directly instead of being redirected. The Swagger UI at `/docs` is no longer served; health checks should use `/`.
 
 ## Documentation
 
 - [API Endpoints](docs/API_ENDPOINTS.md) - Complete API endpoint reference
 - [Interactive Apps Endpoint](docs/INTERACTIVE_APPS_ENDPOINT.md) - Detailed documentation for the `/apps` endpoint
 - [Date Filtering](docs/DATE_FILTERING.md) - Date filter syntax and usage examples
-- [Implementation Status](docs/IMPLEMENTATION_STATUS.md) - Current implementation status and roadmap
-- [Testing Guide](docs/TESTING.md) - Testing approach and guidelines
-
-## API Documentation
-
-Interactive API documentation is available when the server is running:
-
-- **Swagger UI**: `http://localhost:8000/docs`
-- **ReDoc**: `http://localhost:8000/redoc`
-
-The API documentation is organized into three main categories:
-- **Authentication** - User authentication and session management
-- **Apps** - App discovery, job submission, and lifecycle management
-- **Data Store** - iRODS file system operations and metadata access

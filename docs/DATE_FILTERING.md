@@ -82,52 +82,20 @@ Invalid date filter formats return `400 Bad Request` with descriptive error mess
 }
 ```
 
-## Implementation Details
 
-### Files Modified
+The response also includes a `details` object naming the offending query parameter:
 
-1. **`main.py`**
-   - Added `parse_date_filter()` function to parse date filter expressions
-   - Updated `get_interactive_apps()` to accept and process date filters
-   - Modified SQL query to include date comparison filters
-   - Updated `/apps` endpoint with new query parameters
-   - Enhanced Swagger documentation
-
-2. **`tests/test_interactive_apps.py`**
-   - Added comprehensive table-driven tests for `parse_date_filter()`
-   - Tests for valid operators, date formats, timezone conversions
-   - Tests for invalid inputs and error handling
-   - 33 test cases covering edge cases and error conditions
-
-### SQL Query Changes
-
-Date filters are added to the WHERE clause using parameterized queries:
-
-```sql
-WHERE integration_date > %s  -- for integration_date filter
-  AND edited_date IS NOT NULL AND edited_date <= %s  -- for edited_date filter
+```json
+{
+  "detail": "Invalid date format: 'not-a-date'. Expected ISO 8601 format (e.g., '2025-09-29', '2025-09-29T14:30:00', '2025-09-29T14:30:00Z')",
+  "details": {
+    "field": "integration_date"
+  }
+}
 ```
 
-The `edited_date` filter includes a NULL check since that column is nullable.
+## Implementation
 
-### Security
-
-- All date filters use parameterized SQL queries to prevent SQL injection
-- Input validation ensures only valid operators and date formats are accepted
-- Malformed expressions are rejected with clear error messages
-
-## Testing
-
-Run the comprehensive test suite:
-
-```bash
-uv run pytest tests/test_interactive_apps.py -v
-```
-
-**Test Coverage:**
-- 14 tests for valid date filter inputs
-- 18 tests for invalid date filter inputs
-- 4 tests for timezone conversion
-- Additional integration test stubs
-
-All tests passing (41 total).
+Date filters are parsed and applied client-side in `internal/handlers/apputil.go`
+(`parseDateFilter`, `dateFilter.matches`), with table-driven tests in
+`internal/handlers/apputil_test.go`.

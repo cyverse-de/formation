@@ -171,9 +171,9 @@ curl -H "Authorization: Bearer <token>" \
 
 ## File System Operations
 
-**GET /data/browse/{path:path}**
-- Browse iRODS directory contents or retrieve file contents
-- Requires Bearer token authentication
+**GET /data/{path}**
+- Browse iRODS directory contents or stream file contents
+- Requires Bearer token authentication and read permission on the path
 - **Note**: Leading slash is automatically added to paths - no need for double slashes in URLs
 - Query parameters:
   - `offset`: Starting position for file reading (default: 0)
@@ -181,20 +181,55 @@ curl -H "Authorization: Bearer <token>" \
   - `include_metadata`: Include iRODS metadata in response headers (default: false)
   - `avu_delimiter`: Separator for metadata value/unit pairs (default: ",")
 
+**PUT /data/{path}**
+- Upload a file, create a directory, or set AVU metadata on an existing path
+- Requires Bearer token authentication and write permission on the path (or its parent when creating)
+- Operations:
+  - Create or update a file: send the file content as the request body
+  - Create a directory: use the `resource_type=directory` query parameter (no body)
+  - Metadata-only update: send a request without a body to an existing path
+- Metadata is supplied via `X-Datastore-{attribute}` request headers; header values are split into value and units on `avu_delimiter`
+- Query parameters:
+  - `resource_type`: Set to `directory` to create a collection
+  - `avu_delimiter`: Separator for metadata value/unit pairs (default: ",")
+  - `replace_metadata`: When true, replaces existing AVUs for the attributes being set (default: false, which adds)
+
+**DELETE /data/{path}**
+- Delete a file or directory
+- Requires Bearer token authentication and write permission on the path
+- Query parameters:
+  - `recurse`: Allow deleting non-empty directories (default: false)
+  - `dry_run`: Preview the deletion without executing it (default: false)
+- Deleting a non-empty directory without `recurse=true` returns `400`, in both real and dry-run mode
+
 **Examples:**
 
 ```bash
 # List directory contents
 curl -H "Authorization: Bearer <token>" \
-  "http://localhost:8000/data/browse/cyverse/home/username"
+  "http://localhost:8000/data/cyverse/home/username"
 
 # Read file with metadata
 curl -H "Authorization: Bearer <token>" \
-  "http://localhost:8000/data/browse/cyverse/home/username/file.txt?include_metadata=true"
+  "http://localhost:8000/data/cyverse/home/username/file.txt?include_metadata=true"
 
 # Read file with pagination
 curl -H "Authorization: Bearer <token>" \
-  "http://localhost:8000/data/browse/cyverse/home/username/largefile.txt?offset=1000&limit=500"
+  "http://localhost:8000/data/cyverse/home/username/largefile.txt?offset=1000&limit=500"
+
+# Upload a file with metadata
+curl -X PUT -H "Authorization: Bearer <token>" \
+  -H "X-Datastore-Project: myproject" \
+  --data-binary @local-file.txt \
+  "http://localhost:8000/data/cyverse/home/username/file.txt"
+
+# Create a directory
+curl -X PUT -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/data/cyverse/home/username/newdir?resource_type=directory"
+
+# Preview a recursive delete
+curl -X DELETE -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/data/cyverse/home/username/olddir?recurse=true&dry_run=true"
 ```
 
 ## Response Formats
@@ -212,5 +247,43 @@ curl -H "Authorization: Bearer <token>" \
 ```
 
 ### File Content
-- Returns raw file content with appropriate Content-Type header
+- Returns raw file content (streamed) with appropriate Content-Type header
 - When `include_metadata=true`, includes `X-Datastore-{attribute}` headers
+
+### PUT Result
+```json
+{
+  "path": "/cyverse/home/username/file.txt",
+  "type": "data_object",
+  "created": true
+}
+```
+
+### DELETE Result
+```json
+{
+  "path": "/cyverse/home/username/olddir",
+  "type": "collection",
+  "would_delete": true,
+  "deleted": true,
+  "dry_run": false,
+  "item_count": 15
+}
+```
+`item_count` (immediate children) is present only when `recurse=true` and the directory is non-empty.
+
+## Differences from the original Python implementation
+
+Formation was rewritten in Go as a drop-in replacement. Intentional improvements:
+
+- `GET /data` streams file contents instead of buffering whole files in memory.
+- `PUT /data` with `replace_metadata=true` replaces only the AVU attributes being set, preserving unrelated AVUs (including system attributes such as `ipc_UUID`).
+- `DELETE /data` dry runs report the same `400` a real delete would for non-empty directories without `recurse=true`.
+- `GET /apps` uses real upstream pagination, so filtered results are no longer truncated at 1000 apps.
+
+Small mechanical differences:
+
+- Malformed query parameters return `400` with a `{"detail": ...}` body instead of FastAPI's `422` pydantic validation arrays.
+- An invalid date filter returns `400` (the Python version raised an unhandled `500`).
+- `GET /apps/analyses` (no trailing slash) is served directly instead of redirecting to `/apps/analyses/`.
+- The Swagger UI at `/docs` is not served; use `/` for health checks.
