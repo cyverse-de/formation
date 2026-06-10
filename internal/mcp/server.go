@@ -33,6 +33,16 @@ type server struct {
 	cfg  *config.Config
 }
 
+// ToolNames lists every tool NewServer registers, in registration order. The
+// landing page renders it, and TestMCPListTools keeps it in sync with the
+// actual registrations.
+var ToolNames = []string{
+	"list_apps", "launch_app_and_wait", "get_analysis_status",
+	"list_running_analyses", "get_app_parameters", "stop_analysis",
+	"browse_data", "create_directory", "upload_file", "set_metadata",
+	"delete_data",
+}
+
 // NewServer builds the MCP server with all formation tools registered.
 func NewServer(d Deps) *sdk.Server {
 	s := &server{apps: d.Apps, data: d.Data, cfg: d.Cfg}

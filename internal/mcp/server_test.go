@@ -226,11 +226,8 @@ func TestMCPListTools(t *testing.T) {
 	}
 	slices.Sort(got)
 
-	want := []string{
-		"browse_data", "create_directory", "delete_data", "get_analysis_status",
-		"get_app_parameters", "launch_app_and_wait", "list_apps",
-		"list_running_analyses", "set_metadata", "stop_analysis", "upload_file",
-	}
+	want := slices.Clone(ToolNames)
+	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("tools = %v, want %v", got, want)
 	}

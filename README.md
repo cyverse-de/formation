@@ -257,7 +257,7 @@ Formation was originally implemented in Python with FastAPI and rewritten in Go 
 - `DELETE /data` dry runs report the same error a real delete would for non-empty directories without `recurse=true`.
 - `GET /apps` uses real upstream pagination, so results are no longer truncated at 1000 apps when filtering.
 
-Small mechanical differences from FastAPI: malformed query parameters return `400` with a `{"detail": ...}` body instead of pydantic's `422` validation arrays, an invalid date filter returns `400` instead of an unhandled `500`, and `GET /apps/analyses` (without the trailing slash) is served directly instead of being redirected. Health checks should use `/` rather than `/docs`.
+Small mechanical differences from FastAPI: malformed query parameters return `400` with a `{"detail": ...}` body instead of pydantic's `422` validation arrays, an invalid date filter returns `400` instead of an unhandled `500`, and `GET /apps/analyses` (without the trailing slash) is served directly instead of being redirected. `GET /` serves an HTML landing page (MCP client setup instructions plus a Swagger UI link) instead of the JSON string `"Hello from formation."`; health checks should use `/` rather than `/docs` and rely on the status code, not the body.
 
 ## Documentation
 

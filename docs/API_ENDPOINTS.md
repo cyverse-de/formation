@@ -286,4 +286,4 @@ Small mechanical differences:
 - Malformed query parameters return `400` with a `{"detail": ...}` body instead of FastAPI's `422` pydantic validation arrays.
 - An invalid date filter returns `400` (the Python version raised an unhandled `500`).
 - `GET /apps/analyses` (no trailing slash) is served directly instead of redirecting to `/apps/analyses/`.
-- Health checks use `/` instead of `/docs`. Swagger UI is served at `/docs` (generated with swaggo/swag rather than FastAPI, so the spec wording differs).
+- Health checks use `/` instead of `/docs`. `GET /` serves an HTML landing page (MCP client setup instructions plus a Swagger UI link) instead of the JSON string `"Hello from formation."`, so health checks should rely on the status code rather than the body. Swagger UI is served at `/docs` (generated with swaggo/swag rather than FastAPI, so the spec wording differs).

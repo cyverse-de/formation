@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -135,13 +134,17 @@ func buildServer(cfg *config.Config) (*echo.Echo, func(), error) {
 
 	// The spec's basePath makes Swagger UI's try-it-out requests include the
 	// gateway prefix; direct (unprefixed) access works via StripPathPrefix.
-	apidocs.SwaggerInfo.BasePath = strings.TrimSuffix(cfg.PathPrefix, "/")
+	apidocs.SwaggerInfo.BasePath = cfg.PathPrefix
 	e.GET("/docs", func(c echo.Context) error {
 		return c.Redirect(http.StatusMovedPermanently, "docs/index.html")
 	})
 	e.GET("/docs/*", echoSwagger.WrapHandler)
 
-	e.GET("/", handlers.Health)
+	landing, err := handlers.Landing(cfg, mcpserver.ToolNames)
+	if err != nil {
+		return nil, nil, err
+	}
+	e.GET("/", landing)
 	e.POST("/login", handlers.Login(keycloak))
 	e.GET("/user", handlers.UserInfo, requireUser)
 

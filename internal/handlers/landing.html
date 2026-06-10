@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>formation — CyVerse Discovery Environment API</title>
+<style>
+  :root {
+    --ink: #0a1623;
+    --panel: #0f2032;
+    --panel-edge: #1d3954;
+    --code-bg: #081120;
+    --text: #d9e6f2;
+    --muted: #8fa9c0;
+    --accent: #36d1b7;
+    --accent-dim: #1f8d7c;
+    --sky: #5cb8f0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background-color: var(--ink);
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(54, 209, 183, 0.13), transparent 70%),
+      linear-gradient(rgba(92, 184, 240, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(92, 184, 240, 0.04) 1px, transparent 1px);
+    background-size: 100% 100%, 32px 32px, 32px 32px;
+    color: var(--text);
+    font-family: Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'DejaVu Sans', sans-serif;
+    font-size: 17px;
+    line-height: 1.6;
+  }
+  main {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 4.5rem 1.5rem 5rem;
+  }
+  h1, h2, h3, code, pre, .chip, .endpoint {
+    font-family: ui-monospace, 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+  }
+  header { margin-bottom: 3.5rem; }
+  h1 {
+    font-size: 2.6rem;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    margin: 0;
+  }
+  h1::before { content: "▍"; color: var(--accent); margin-right: 0.1em; }
+  .tagline { color: var(--muted); margin: 0.6rem 0 0; font-size: 1.05rem; }
+  .tagline a { color: var(--sky); }
+  section { margin-bottom: 3.25rem; }
+  h2 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--accent);
+    border-bottom: 1px solid var(--panel-edge);
+    padding-bottom: 0.6rem;
+    margin: 0 0 1.2rem;
+  }
+  h3 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--sky);
+    margin: 1.8rem 0 0.5rem;
+  }
+  p { margin: 0.6rem 0; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  a:hover { color: var(--text); }
+  .endpoint {
+    display: block;
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 0.9rem 1.1rem;
+    font-size: 1rem;
+    margin: 1rem 0;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--panel-edge);
+    border-radius: 6px;
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.55;
+    margin: 0.5rem 0 0;
+  }
+  code { font-size: 0.85em; color: var(--sky); }
+  pre code { color: var(--text); font-size: 1em; }
+  .muted { color: var(--muted); font-size: 0.92rem; }
+  .chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; padding: 0; list-style: none; }
+  .chip {
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 999px;
+    color: var(--sky);
+    font-size: 0.78rem;
+    padding: 0.25rem 0.75rem;
+  }
+  .docs-card {
+    display: block;
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 6px;
+    padding: 1rem 1.1rem;
+    text-decoration: none;
+  }
+  .docs-card:hover { border-color: var(--accent-dim); }
+  .docs-card strong { color: var(--accent); font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .docs-card span { display: block; color: var(--muted); font-size: 0.92rem; margin-top: 0.2rem; }
+  footer {
+    border-top: 1px solid var(--panel-edge);
+    padding-top: 1.5rem;
+    color: var(--muted);
+    font-size: 0.88rem;
+  }
+  footer a { color: var(--muted); }
+  @media (prefers-reduced-motion: no-preference) {
+    header, section, footer {
+      animation: rise 0.5s ease-out backwards;
+    }
+    section:nth-of-type(1) { animation-delay: 0.08s; }
+    section:nth-of-type(2) { animation-delay: 0.16s; }
+    footer { animation-delay: 0.24s; }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: none; }
+    }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>formation</h1>
+    <p class="tagline">The <a href="https://cyverse.org">CyVerse</a> Discovery Environment API
+    for AI&nbsp;agents — launch apps, monitor analyses, and manage data in the
+    CyVerse Data Store.</p>
+  </header>
+
+  {{if .MCPEnabled}}
+  <section>
+    <h2>MCP Server</h2>
+    <p>Formation hosts a <a href="https://modelcontextprotocol.io">Model Context Protocol</a>
+    server over streamable HTTP:</p>
+    <span class="endpoint">{{.MCPURL}}</span>
+    <p class="muted">Authentication uses OAuth via CyVerse Keycloak with standard MCP
+    discovery and dynamic client registration — clients that support MCP OAuth only need
+    the URL above and will open a browser so you can log in with your CyVerse account.</p>
+
+    <h3>Claude Code</h3>
+    <pre><code>claude mcp add --transport http formation {{.MCPURL}}</code></pre>
+
+    <h3>Cursor, VS Code, and other clients</h3>
+    <p class="muted">For clients that accept remote servers in an
+    <code>mcpServers</code> config block:</p>
+    <pre><code>{
+  "mcpServers": {
+    "formation": {
+      "type": "http",
+      "url": "{{.MCPURL}}"
+    }
+  }
+}</code></pre>
+    <p class="muted">In Claude Desktop or claude.ai, use <strong>Settings &rarr;
+    Connectors &rarr; Add custom connector</strong> with the URL above instead —
+    the desktop config file only supports local stdio servers.</p>
+
+    <h3>Google Antigravity 2.0 and the agy CLI</h3>
+    <p class="muted">Both share <code>~/.gemini/config/mcp_config.json</code>; note that
+    Antigravity uses <code>serverUrl</code> rather than <code>url</code>:</p>
+    <pre><code>{
+  "mcpServers": {
+    "formation": {
+      "serverUrl": "{{.MCPURL}}"
+    }
+  }
+}</code></pre>
+    <p class="muted">Then refresh the Installed MCP Servers panel in the GUI, or run
+    <code>/mcp</code> in <code>agy</code>.</p>
+
+    <h3>Available tools</h3>
+    <ul class="chips">
+      {{range .Tools}}<li class="chip">{{.}}</li>
+      {{end}}
+    </ul>
+  </section>
+  {{end}}
+
+  <section>
+    <h2>REST API</h2>
+    <a class="docs-card" href="{{.DocsURL}}">
+      <strong>{{.DocsURL}}</strong>
+      <span>Interactive Swagger UI — browse every endpoint and try requests in place.</span>
+    </a>
+  </section>
+
+  <footer>
+    <a href="https://github.com/cyverse-de/formation">cyverse-de/formation</a> ·
+    a <a href="https://cyverse.org">CyVerse</a> service
+  </footer>
+</main>
+</body>
+</html>
