@@ -274,6 +274,19 @@ func TestLoad(t *testing.T) {
 			wantErr: "MCP_CLIENT_ID",
 		},
 		{
+			// "https:host" parses as scheme+opaque with no host; it must be rejected.
+			name:    "public base url missing slashes errors",
+			json:    minimalJSON,
+			env:     map[string]string{"PUBLIC_BASE_URL": "https:qa.cyverse.org/formation"},
+			wantErr: "PUBLIC_BASE_URL",
+		},
+		{
+			name:    "public base url without scheme errors",
+			json:    minimalJSON,
+			env:     map[string]string{"PUBLIC_BASE_URL": "qa.cyverse.org/formation"},
+			wantErr: "PUBLIC_BASE_URL",
+		},
+		{
 			name: "mcp settings from JSON",
 			json: strings.Replace(minimalJSON, `"client_secret": "kcsecret"`,
 				`"client_secret": "kcsecret", "mcp_client_id": "json-mcp-client", "mcp_scopes": "openid"`, 1),

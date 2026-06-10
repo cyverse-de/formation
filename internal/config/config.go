@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -158,6 +159,12 @@ func Load() (*Config, error) {
 			return nil, err
 		}
 		cfg.PublicBaseURL = strings.TrimSuffix(cfg.PublicBaseURL, "/")
+		// This URL is embedded in every OAuth discovery document; a malformed
+		// value (e.g. "https:host" without "//") breaks MCP clients with
+		// errors that point nowhere near the cause, so fail fast instead.
+		if err := validatePublicBaseURL(cfg.PublicBaseURL); err != nil {
+			return nil, err
+		}
 	}
 	cfg.MCPScopes = optional("MCP_SCOPES", keycloak, "mcp_scopes", DefaultMCPScopes)
 	if cfg.MCPLaunchMaxWait, err = duration("MCP_LAUNCH_MAX_WAIT", app, "mcp_launch_max_wait", DefaultMCPLaunchMaxWait); err != nil {
@@ -168,6 +175,17 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// validatePublicBaseURL requires an absolute http(s) URL with a host.
+func validatePublicBaseURL(value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf(
+			"invalid value for PUBLIC_BASE_URL: %q must be an absolute http(s) URL like https://de.cyverse.org/formation",
+			value)
+	}
+	return nil
 }
 
 func loadJSONFile() (map[string]any, error) {
