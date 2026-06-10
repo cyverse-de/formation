@@ -110,7 +110,7 @@ The config file path defaults to `config.json` in the working directory and can 
 **application**: Application behavior settings
 - `user_suffix`: Username suffix to strip from integrator usernames
 - `vice_domain`: Domain suffix for VICE applications
-- `path_prefix`: URL path prefix for the service (proxy metadata only; routes serve at `/`)
+- `path_prefix`: URL path prefix stripped from incoming requests when present (the gateway forwards paths like `/formation/apps` unrewritten); all routes also serve at `/`
 - `vice_url_check_timeout`: Timeout for VICE URL checks in seconds
 - `vice_url_check_retries`: Number of retries for VICE URL checks
 - `vice_url_check_cache_ttl`: Cache TTL for VICE URL check results in seconds

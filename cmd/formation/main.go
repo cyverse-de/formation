@@ -81,8 +81,10 @@ func buildServer(cfg *config.Config) (*echo.Echo, func(), error) {
 	e.HTTPErrorHandler = apierror.HTTPErrorHandler
 	e.Use(otelecho.Middleware(serviceName))
 
-	// PATH_PREFIX matches FastAPI's root_path: proxy metadata only, never routing.
-	log.Infof("configured path prefix (informational, routes serve at /): %s", cfg.PathPrefix)
+	// The gateway forwards requests with the path prefix intact, so strip it
+	// before routing like FastAPI's root_path did; bare paths also work.
+	e.Pre(handlers.StripPathPrefix(cfg.PathPrefix))
+	log.Infof("stripping configured path prefix before routing: %s", cfg.PathPrefix)
 
 	keycloak, err := auth.NewKeycloak(
 		cfg.KeycloakServerURL, cfg.KeycloakRealm,
