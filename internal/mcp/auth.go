@@ -12,9 +12,13 @@ import (
 	"github.com/cyverse-de/formation/internal/auth"
 )
 
-// claimsExtraKey carries the verified *auth.Claims through TokenInfo.Extra
-// from the bearer-token middleware to the tool handlers.
-const claimsExtraKey = "formation.claims"
+// claimsExtraKey and tokenExtraKey carry the verified *auth.Claims and the raw
+// bearer token through TokenInfo.Extra from the bearer-token middleware to the
+// tool handlers; the token is forwarded on calls to terrain.
+const (
+	claimsExtraKey = "formation.claims"
+	tokenExtraKey  = "formation.token"
+)
 
 // tokenVerifier adapts the Keycloak verifier to the SDK's TokenVerifier so
 // /mcp accepts the same realm tokens as the REST endpoints.
@@ -38,26 +42,29 @@ func tokenVerifier(v *auth.Verifier) sdkauth.TokenVerifier {
 		return &sdkauth.TokenInfo{
 			UserID:     userID,
 			Expiration: claims.Expiry(),
-			Extra:      map[string]any{claimsExtraKey: claims},
+			Extra:      map[string]any{claimsExtraKey: claims, tokenExtraKey: token},
 		}, nil
 	}
 }
 
-// requestClaims returns the verified token claims for a tool call.
-func requestClaims(req *sdk.CallToolRequest) (*auth.Claims, error) {
+// requestIdentity returns the verified token claims and the raw bearer token
+// for a tool call.
+func requestIdentity(req *sdk.CallToolRequest) (*auth.Claims, string, error) {
 	if req.Extra != nil && req.Extra.TokenInfo != nil {
-		if claims, ok := req.Extra.TokenInfo.Extra[claimsExtraKey].(*auth.Claims); ok {
-			return claims, nil
+		claims, ok := req.Extra.TokenInfo.Extra[claimsExtraKey].(*auth.Claims)
+		token, _ := req.Extra.TokenInfo.Extra[tokenExtraKey].(string)
+		if ok {
+			return claims, token, nil
 		}
 	}
-	return nil, errors.New("not authenticated")
+	return nil, "", errors.New("not authenticated")
 }
 
 // appsIdentity resolves the identity for the apps/analyses tools, mirroring
 // the REST RequireUserOrServiceAccount policy: service accounts need the
 // app-runner realm role, and service-accounts-only mode rejects users.
 func (s *server) appsIdentity(req *sdk.CallToolRequest) (*auth.Info, error) {
-	claims, err := requestClaims(req)
+	claims, token, err := requestIdentity(req)
 	if err != nil {
 		return nil, err
 	}
@@ -66,34 +73,30 @@ func (s *server) appsIdentity(req *sdk.CallToolRequest) (*auth.Info, error) {
 		if !claims.HasRole(auth.AppRunnerRole) {
 			return nil, fmt.Errorf("service account missing required role: %q", auth.AppRunnerRole)
 		}
-		return &auth.Info{Type: auth.TypeServiceAccount, Claims: claims}, nil
+		return &auth.Info{Type: auth.TypeServiceAccount, Claims: claims, Token: token}, nil
 	}
 
 	if s.cfg.ServiceAccountsOnly {
 		return nil, errors.New("service accounts only mode: regular user authentication is disabled")
 	}
-	return &auth.Info{Type: auth.TypeUser, Claims: claims}, nil
+	return &auth.Info{Type: auth.TypeUser, Claims: claims, Token: token}, nil
 }
 
-// appsUsername resolves the backend username for the apps/analyses tools.
-func (s *server) appsUsername(req *sdk.CallToolRequest) (*auth.Info, string, error) {
+// appsCaller resolves the terrain-ready caller for the apps/analyses tools.
+func (s *server) appsCaller(ctx context.Context, req *sdk.CallToolRequest) (*auth.Caller, error) {
 	info, err := s.appsIdentity(req)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	username, err := info.UsernameForBackend(s.cfg.ServiceAccountUsernames)
-	if err != nil {
-		return nil, "", err
-	}
-	return info, username, nil
+	return s.apps.ResolveCaller(ctx, info)
 }
 
-// dataUsername resolves the identity for the data tools, mirroring the REST
+// dataCaller resolves the identity for the data tools, mirroring the REST
 // RequireUser policy: any valid token acts as a user under its JWT username.
-func dataUsername(req *sdk.CallToolRequest) (string, error) {
-	claims, err := requestClaims(req)
+func dataCaller(req *sdk.CallToolRequest) (*auth.Caller, error) {
+	claims, token, err := requestIdentity(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return claims.Username()
+	return auth.UserCaller(&auth.Info{Type: auth.TypeUser, Claims: claims, Token: token})
 }

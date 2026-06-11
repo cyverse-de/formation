@@ -42,7 +42,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Submits an analysis. The body is optional; missing fields get defaults: a generated\nanalysis name, an output directory under the user's home, the email from the JWT,\ndebug=false, and notify=true. Swagger UI placeholder values are stripped.",
+                "description": "Submits an analysis. The body is optional; missing fields get defaults: a generated\nanalysis name, an output directory under the user's home, debug=false, and notify=true.\nSwagger UI placeholder values are stripped. Notification email comes from the token.",
                 "consumes": [
                     "application/json"
                 ],
@@ -307,7 +307,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "The analysis record as returned by the apps service",
+                        "description": "The analysis record as returned by the DE backend",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -321,7 +321,7 @@ const docTemplate = `{
                         }
                     },
                     "502": {
-                        "description": "Apps service error (including unknown analyses)",
+                        "description": "Terrain service error (including unknown analyses)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -369,7 +369,7 @@ const docTemplate = `{
                         }
                     },
                     "502": {
-                        "description": "Apps service error (including unknown analyses)",
+                        "description": "Terrain service error (including unknown analyses)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -774,9 +774,6 @@ const docTemplate = `{
                 },
                 "debug": {
                     "type": "boolean"
-                },
-                "email": {
-                    "type": "string"
                 },
                 "name": {
                     "type": "string"

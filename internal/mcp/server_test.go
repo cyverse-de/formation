@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"encoding/json"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -18,9 +17,8 @@ import (
 	"github.com/cyverse-de/formation/internal/authtest"
 	"github.com/cyverse-de/formation/internal/clients"
 	"github.com/cyverse-de/formation/internal/config"
-	"github.com/cyverse-de/formation/internal/datastore"
-	"github.com/cyverse-de/formation/internal/datastore/datastoretest"
 	"github.com/cyverse-de/formation/internal/handlers"
+	"github.com/cyverse-de/formation/internal/terraintest"
 	"github.com/cyverse-de/formation/internal/vice"
 )
 
@@ -29,64 +27,45 @@ const (
 	testAnalysisID = "9876fedc-0000-4000-8000-00000000cafe"
 )
 
-// upstreamCall records one request received by a service stub.
-type upstreamCall struct {
-	method string
-	path   string
-	body   map[string]any
-}
-
-// recordingStub captures every request and serves responses from respond.
-func recordingStub(calls *[]upstreamCall, respond func(r *http.Request) (int, any)) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := upstreamCall{method: r.Method, path: r.URL.Path}
-		_ = json.NewDecoder(r.Body).Decode(&call.body)
-		*calls = append(*calls, call)
-
-		status, payload := respond(r)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		if payload != nil {
-			_ = json.NewEncoder(w).Encode(payload)
-		}
-	})
-}
-
-// env runs the full /mcp stack: fake Keycloak, stubbed apps and app-exposer
-// services, an in-memory data store, and the prefix-stripping middleware,
-// mirroring buildServer.
+// env runs the full /mcp stack: fake Keycloak, a fake terrain (including its
+// in-memory data endpoints), and the prefix-stripping middleware, mirroring
+// buildServer.
 type env struct {
 	serverURL string
 	kc        *authtest.Keycloak
-	store     *datastoretest.Store
+	terrain   *terraintest.Server
+	data      *terraintest.Data
 	cfg       *config.Config
 }
 
-func newEnv(t *testing.T, appsHandler, exposerHandler http.Handler) *env {
+func newEnv(t *testing.T, respond func(r *http.Request) (int, any)) *env {
 	t.Helper()
 
-	if appsHandler == nil {
-		appsHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
+	// The data endpoints are always served by the stateful fake; everything
+	// else goes to the per-test respond function.
+	fakeData := terraintest.NewData()
+	combined := func(r *http.Request) (int, any) {
+		if strings.HasPrefix(r.URL.Path, "/secured/") {
+			return fakeData.Respond(r)
+		}
+		if respond == nil {
+			return http.StatusInternalServerError, nil
+		}
+		return respond(r)
 	}
-	if exposerHandler == nil {
-		exposerHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
-	}
-	appsServer := httptest.NewServer(appsHandler)
-	t.Cleanup(appsServer.Close)
-	exposerServer := httptest.NewServer(exposerHandler)
-	t.Cleanup(exposerServer.Close)
 
-	appsClient, err := clients.NewApps(appsServer.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	exposerClient, err := clients.NewAppExposer(exposerServer.URL)
+	terrain := terraintest.New(t, combined)
+	terrainClient, err := clients.NewTerrain(terrain.URL())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	kc := authtest.New(t, "de")
 	verifier := auth.NewVerifier(kc.ServerURL(), kc.Realm, true)
+	keycloak, err := auth.NewKeycloak(kc.ServerURL(), kc.Realm, "formation", "secret", true)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cfg := &config.Config{
 		KeycloakServerURL:       kc.ServerURL() + "/",
@@ -104,14 +83,15 @@ func newEnv(t *testing.T, appsHandler, exposerHandler http.Handler) *env {
 		MCPBrowseByteLimit:      config.DefaultMCPBrowseByteLimit,
 	}
 
+	callers := auth.NewCallerResolver(auth.NewImpersonator(keycloak), cfg.ServiceAccountUsernames)
 	apps := handlers.NewApps(
-		appsClient, exposerClient,
+		terrainClient,
 		vice.NewURLChecker(200*time.Millisecond, 1, time.Minute),
-		vice.NewSubdomainResolverWithRetries(exposerClient, 1, time.Millisecond),
+		vice.NewSubdomainResolverWithRetries(terrainClient, 1, time.Millisecond),
+		callers,
 		cfg,
 	)
-	store := datastoretest.New("alice")
-	data := handlers.NewData(store)
+	data := handlers.NewData(terrainClient)
 
 	e := echo.New()
 	e.HTTPErrorHandler = apierror.HTTPErrorHandler
@@ -122,7 +102,7 @@ func newEnv(t *testing.T, appsHandler, exposerHandler http.Handler) *env {
 	srv := httptest.NewServer(e)
 	t.Cleanup(srv.Close)
 
-	return &env{serverURL: srv.URL, kc: kc, store: store, cfg: cfg}
+	return &env{serverURL: srv.URL, kc: kc, terrain: terrain, data: fakeData, cfg: cfg}
 }
 
 // authTransport adds the bearer token to every outgoing request.
@@ -178,7 +158,7 @@ func textContent(t *testing.T, result *sdk.CallToolResult) string {
 }
 
 func TestMCPRequiresBearerToken(t *testing.T) {
-	env := newEnv(t, nil, nil)
+	env := newEnv(t, nil)
 
 	tests := []struct {
 		name string
@@ -212,7 +192,7 @@ func TestMCPRequiresBearerToken(t *testing.T) {
 }
 
 func TestMCPListTools(t *testing.T) {
-	env := newEnv(t, nil, nil)
+	env := newEnv(t, nil)
 	session := env.connect(t, nil)
 
 	result, err := session.ListTools(t.Context(), nil)
@@ -234,23 +214,20 @@ func TestMCPListTools(t *testing.T) {
 }
 
 func TestMCPListApps(t *testing.T) {
-	appsStub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("user") != "alice" {
-			w.WriteHeader(500)
-			return
+	env := newEnv(t, func(r *http.Request) (int, any) {
+		// Terrain derives the user from the forwarded bearer token.
+		if r.Header.Get("Authorization") == "" {
+			return 500, nil
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		return 200, map[string]any{
 			"total": 2,
 			"apps": []map[string]any{
 				{"id": testAppID, "name": "JupyterLab", "system_id": "de", "description": "notebooks",
 					"integrator_name": "bob@iplantcollaborative.org"},
 				{"id": testAppID, "name": "RStudio", "system_id": "de"},
 			},
-		})
+		}
 	})
-
-	env := newEnv(t, appsStub, nil)
 	session := env.connect(t, nil)
 
 	result := callTool(t, session, "list_apps", map[string]any{"name": "lab"})
@@ -267,7 +244,7 @@ func TestMCPListApps(t *testing.T) {
 }
 
 func TestMCPServiceAccountPolicy(t *testing.T) {
-	env := newEnv(t, nil, nil)
+	env := newEnv(t, nil)
 
 	t.Run("service account without app-runner role is rejected on apps tools", func(t *testing.T) {
 		session := env.connect(t, map[string]any{"preferred_username": "service-account-ci"})
@@ -282,15 +259,11 @@ func TestMCPServiceAccountPolicy(t *testing.T) {
 		}
 	})
 
-	t.Run("service account with role uses the mapped backend username", func(t *testing.T) {
-		var calls []upstreamCall
-		appsStub := recordingStub(&calls, func(r *http.Request) (int, any) {
-			if r.URL.Query().Get("user") != "svc" {
-				return 500, nil
-			}
+	t.Run("service account with role acts as the mapped impersonated user", func(t *testing.T) {
+		saEnv := newEnv(t, func(r *http.Request) (int, any) {
 			return 200, map[string]any{"analyses": []map[string]any{}}
 		})
-		saEnv := newEnv(t, appsStub, nil)
+		exchange := saEnv.kc.ServeTokenExchange(t)
 
 		session := saEnv.connect(t, map[string]any{
 			"preferred_username": "service-account-ci",
@@ -302,6 +275,16 @@ func TestMCPServiceAccountPolicy(t *testing.T) {
 		}
 		if text := textContent(t, result); text != "No running analyses found" {
 			t.Errorf("text = %q", text)
+		}
+
+		// Terrain must receive the impersonation token for the mapped user.
+		impersonated := exchange.IssuedFor("svc")
+		if impersonated == "" {
+			t.Fatal("no token exchange happened for svc")
+		}
+		calls := saEnv.terrain.Calls()
+		if len(calls) == 0 || calls[0].BearerToken() != impersonated {
+			t.Errorf("terrain calls = %+v, want the impersonation token", calls)
 		}
 	})
 }
@@ -318,15 +301,12 @@ func TestMCPLaunchAppAndWait(t *testing.T) {
 	}
 
 	t.Run("missing required parameters returns the template without launching", func(t *testing.T) {
-		var calls []upstreamCall
-		appsStub := recordingStub(&calls, func(r *http.Request) (int, any) {
+		env := newEnv(t, func(r *http.Request) (int, any) {
 			if strings.HasPrefix(r.URL.Path, "/apps/") {
 				return 200, appResponse
 			}
 			return 500, nil
 		})
-
-		env := newEnv(t, appsStub, nil)
 		session := env.connect(t, nil)
 
 		result := callTool(t, session, "launch_app_and_wait", map[string]any{"app_id": testAppID})
@@ -343,16 +323,15 @@ func TestMCPLaunchAppAndWait(t *testing.T) {
 		if strings.Contains(text, "param-2") {
 			t.Errorf("invisible parameter should not be reported:\n%s", text)
 		}
-		for _, call := range calls {
-			if call.method == http.MethodPost {
-				t.Errorf("unexpected launch POST to %s", call.path)
+		for _, call := range env.terrain.Calls() {
+			if call.Method == http.MethodPost {
+				t.Errorf("unexpected launch POST to %s", call.Path)
 			}
 		}
 	})
 
 	t.Run("batch job returns immediately after submission", func(t *testing.T) {
-		var calls []upstreamCall
-		appsStub := recordingStub(&calls, func(r *http.Request) (int, any) {
+		env := newEnv(t, func(r *http.Request) (int, any) {
 			switch {
 			case strings.HasPrefix(r.URL.Path, "/apps/"):
 				return 200, map[string]any{"overall_job_type": "DE", "groups": []any{}}
@@ -362,8 +341,6 @@ func TestMCPLaunchAppAndWait(t *testing.T) {
 				return 500, nil
 			}
 		})
-
-		env := newEnv(t, appsStub, nil)
 		session := env.connect(t, nil)
 
 		result := callTool(t, session, "launch_app_and_wait", map[string]any{"app_id": testAppID, "name": "run"})
@@ -384,33 +361,23 @@ func TestMCPLaunchAppAndWait(t *testing.T) {
 		launchPollInterval = 10 * time.Millisecond
 		defer func() { launchPollInterval = restore }()
 
-		appsStub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
+		env := newEnv(t, func(r *http.Request) (int, any) {
 			switch {
 			case strings.HasPrefix(r.URL.Path, "/apps/"):
 				// App metadata without overall_job_type, like some VICE apps.
-				_ = json.NewEncoder(w).Encode(map[string]any{"groups": []any{}})
+				return 200, map[string]any{"groups": []any{}}
 			case r.URL.Path == "/analyses" && r.Method == http.MethodPost:
-				_ = json.NewEncoder(w).Encode(map[string]any{"id": testAnalysisID, "status": "Submitted"})
+				return 200, map[string]any{"id": testAnalysisID, "status": "Submitted"}
 			case r.URL.Path == "/analyses":
-				_ = json.NewEncoder(w).Encode(map[string]any{"analyses": []map[string]any{{"id": testAnalysisID, "status": "Running"}}})
-			default:
-				w.WriteHeader(500)
-			}
-		})
-		exposerStub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			switch {
+				return 200, map[string]any{"analyses": []map[string]any{{"id": testAnalysisID, "status": "Running"}}}
 			case strings.HasSuffix(r.URL.Path, "/external-id"):
-				_ = json.NewEncoder(w).Encode(map[string]any{"external_id": "ext-1"})
+				return 200, map[string]any{"externalID": "ext-1"}
 			case r.URL.Path == "/vice/async-data":
-				_ = json.NewEncoder(w).Encode(map[string]any{"subdomain": "a1b2c3"})
+				return 200, map[string]any{"subdomain": "a1b2c3"}
 			default:
-				w.WriteHeader(500)
+				return 500, nil
 			}
 		})
-
-		env := newEnv(t, appsStub, exposerStub)
 		session := env.connect(t, nil)
 
 		result := callTool(t, session, "launch_app_and_wait", map[string]any{"app_id": testAppID, "max_wait": 1})
@@ -431,19 +398,16 @@ func TestMCPLaunchAppAndWait(t *testing.T) {
 		launchPollInterval = 10 * time.Millisecond
 		defer func() { launchPollInterval = restore }()
 
-		appsStub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
+		env := newEnv(t, func(r *http.Request) (int, any) {
 			switch {
 			case r.URL.Path == "/analyses" && r.Method == http.MethodPost:
-				_ = json.NewEncoder(w).Encode(map[string]any{"id": testAnalysisID, "status": "Submitted"})
+				return 200, map[string]any{"id": testAnalysisID, "status": "Submitted"}
 			case r.URL.Path == "/analyses":
-				_ = json.NewEncoder(w).Encode(map[string]any{"analyses": []map[string]any{{"id": testAnalysisID, "status": "Running"}}})
+				return 200, map[string]any{"analyses": []map[string]any{{"id": testAnalysisID, "status": "Running"}}}
 			default:
-				w.WriteHeader(500)
+				return 500, nil
 			}
 		})
-
-		env := newEnv(t, appsStub, nil)
 		session := env.connect(t, nil)
 
 		// overall_job_type skips the parameter fetch, like the Python client.
@@ -463,10 +427,10 @@ func TestMCPLaunchAppAndWait(t *testing.T) {
 
 func TestMCPDataTools(t *testing.T) {
 	t.Run("browse directory", func(t *testing.T) {
-		env := newEnv(t, nil, nil)
-		env.store.Dirs["/iplant/home/alice"] = []datastore.Entry{
-			{Name: "subdir", Type: datastore.TypeCollection},
-			{Name: "notes.txt", Type: datastore.TypeDataObject},
+		env := newEnv(t, nil)
+		env.data.Dirs["/iplant/home/alice"] = []terraintest.DataEntry{
+			{Name: "subdir", Dir: true},
+			{Name: "notes.txt"},
 		}
 
 		session := env.connect(t, nil)
@@ -483,9 +447,9 @@ func TestMCPDataTools(t *testing.T) {
 	})
 
 	t.Run("browse file with metadata and truncation", func(t *testing.T) {
-		env := newEnv(t, nil, nil)
-		env.store.Files["/iplant/file.txt"] = []byte("0123456789")
-		env.store.Meta["/iplant/file.txt"] = []datastore.AVU{{Attribute: "weight", Value: "12", Units: "kg"}}
+		env := newEnv(t, nil)
+		env.data.Files["/iplant/file.txt"] = []byte("0123456789")
+		env.data.Meta["/iplant/file.txt"] = []terraintest.DataAVU{{Attr: "weight", Value: "12", Unit: "kg"}}
 
 		session := env.connect(t, nil)
 		result := callTool(t, session, "browse_data", map[string]any{
@@ -500,8 +464,8 @@ func TestMCPDataTools(t *testing.T) {
 	})
 
 	t.Run("upload create and metadata conversion", func(t *testing.T) {
-		env := newEnv(t, nil, nil)
-		env.store.Dirs["/iplant/home/alice"] = nil
+		env := newEnv(t, nil)
+		env.data.Dirs["/iplant/home/alice"] = nil
 
 		session := env.connect(t, nil)
 		result := callTool(t, session, "upload_file", map[string]any{
@@ -512,34 +476,35 @@ func TestMCPDataTools(t *testing.T) {
 		if text := textContent(t, result); text != "File created: `/iplant/home/alice/new.txt`" {
 			t.Errorf("text = %q", text)
 		}
-		if got := string(env.store.Uploads["/iplant/home/alice/new.txt"]); got != "hello world" {
+		if got := string(env.data.Uploads["/iplant/home/alice/new.txt"]); got != "hello world" {
 			t.Errorf("uploaded content = %q", got)
 		}
 
 		// Attributes lowercased and units split on comma, like the REST headers.
-		wantAVUs := []datastore.AVU{{Attribute: "author", Value: "alice"}, {Attribute: "weight", Value: "12", Units: "kg"}}
-		if len(env.store.SetMetaCalls) != 1 || !slices.Equal(env.store.SetMetaCalls[0].AVUs, wantAVUs) {
-			t.Errorf("SetMetaCalls = %+v", env.store.SetMetaCalls)
+		wantAVUs := []terraintest.DataAVU{{Attr: "author", Value: "alice"}, {Attr: "weight", Value: "12", Unit: "kg"}}
+		if len(env.data.MetaSets) != 1 || !slices.Equal(env.data.MetaSets[0].AVUs, wantAVUs) {
+			t.Errorf("MetaSets = %+v", env.data.MetaSets)
 		}
 	})
 
 	t.Run("create directory", func(t *testing.T) {
-		env := newEnv(t, nil, nil)
-		env.store.Dirs["/iplant/home/alice"] = nil
+		env := newEnv(t, nil)
+		env.data.Dirs["/iplant/home/alice"] = nil
 
 		session := env.connect(t, nil)
 		result := callTool(t, session, "create_directory", map[string]any{"path": "/iplant/home/alice/newdir"})
 		if text := textContent(t, result); text != "Directory created: `/iplant/home/alice/newdir`" {
 			t.Errorf("text = %q", text)
 		}
-		if !slices.Contains(env.store.CreatedDirs, "/iplant/home/alice/newdir") {
-			t.Errorf("CreatedDirs = %v", env.store.CreatedDirs)
+		if !slices.Contains(env.data.CreatedDirs, "/iplant/home/alice/newdir") {
+			t.Errorf("CreatedDirs = %v", env.data.CreatedDirs)
 		}
 	})
 
 	t.Run("set metadata replace", func(t *testing.T) {
-		env := newEnv(t, nil, nil)
-		env.store.Files["/iplant/file.txt"] = []byte("x")
+		env := newEnv(t, nil)
+		env.data.Files["/iplant/file.txt"] = []byte("x")
+		env.data.Meta["/iplant/file.txt"] = []terraintest.DataAVU{{Attr: "author", Value: "old"}}
 
 		session := env.connect(t, nil)
 		result := callTool(t, session, "set_metadata", map[string]any{
@@ -548,14 +513,16 @@ func TestMCPDataTools(t *testing.T) {
 		if text := textContent(t, result); text != "Metadata replaced for: `/iplant/file.txt`" {
 			t.Errorf("text = %q", text)
 		}
-		if len(env.store.SetMetaCalls) != 1 || !env.store.SetMetaCalls[0].Replace {
-			t.Errorf("SetMetaCalls = %+v", env.store.SetMetaCalls)
+		// Replace mode drops the existing author AVU before adding the new one.
+		want := []terraintest.DataAVU{{Attr: "author", Value: "bob"}}
+		if len(env.data.MetaSets) != 1 || !slices.Equal(env.data.MetaSets[0].AVUs, want) {
+			t.Errorf("MetaSets = %+v", env.data.MetaSets)
 		}
 	})
 
 	t.Run("delete dry run and real delete", func(t *testing.T) {
-		env := newEnv(t, nil, nil)
-		env.store.Dirs["/iplant/full"] = []datastore.Entry{{Name: "child.txt", Type: datastore.TypeDataObject}}
+		env := newEnv(t, nil)
+		env.data.Dirs["/iplant/full"] = []terraintest.DataEntry{{Name: "child.txt"}}
 
 		session := env.connect(t, nil)
 		result := callTool(t, session, "delete_data", map[string]any{
@@ -564,23 +531,23 @@ func TestMCPDataTools(t *testing.T) {
 		if text := textContent(t, result); text != "Dry-run: Would delete `/iplant/full` (1 items)" {
 			t.Errorf("text = %q", text)
 		}
-		if len(env.store.DeletedDirs) != 0 {
-			t.Errorf("DeletedDirs = %v, want none after dry run", env.store.DeletedDirs)
+		if len(env.data.Deleted) != 0 {
+			t.Errorf("Deleted = %v, want none after dry run", env.data.Deleted)
 		}
 
 		result = callTool(t, session, "delete_data", map[string]any{"path": "/iplant/full", "recurse": true})
 		if text := textContent(t, result); text != "Deleted (recursive): `/iplant/full` (1 items)" {
 			t.Errorf("text = %q", text)
 		}
-		if len(env.store.DeletedDirs) != 1 {
-			t.Errorf("DeletedDirs = %v", env.store.DeletedDirs)
+		if !slices.Contains(env.data.Deleted, "/iplant/full") {
+			t.Errorf("Deleted = %v", env.data.Deleted)
 		}
 	})
 
 	t.Run("permission errors surface as tool errors", func(t *testing.T) {
-		env := newEnv(t, nil, nil)
-		env.store.Files["/iplant/secret.txt"] = []byte("x")
-		env.store.DenyRead = []string{"/iplant/secret.txt"}
+		env := newEnv(t, nil)
+		env.data.Files["/iplant/secret.txt"] = []byte("x")
+		env.data.Perms["/iplant/secret.txt"] = "none"
 
 		session := env.connect(t, nil)
 		result := callTool(t, session, "browse_data", map[string]any{"path": "/iplant/secret.txt"})
@@ -603,25 +570,22 @@ func TestMCPStopAnalysis(t *testing.T) {
 		{
 			name:     "default saves outputs",
 			args:     map[string]any{"analysis_id": testAnalysisID},
-			wantPath: "/vice/admin/analyses/" + testAnalysisID + "/save-and-exit",
+			wantPath: "/analyses/" + testAnalysisID + "/stop",
 			wantText: "Analysis stopped with saving outputs",
 		},
 		{
 			name:     "save_outputs false exits without saving",
 			args:     map[string]any{"analysis_id": testAnalysisID, "save_outputs": false},
-			wantPath: "/vice/admin/analyses/" + testAnalysisID + "/exit",
+			wantPath: "/vice/analyses/" + testAnalysisID + "/exit",
 			wantText: "Analysis stopped without saving outputs",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var calls []upstreamCall
-			exposerStub := recordingStub(&calls, func(r *http.Request) (int, any) {
+			env := newEnv(t, func(r *http.Request) (int, any) {
 				return 200, map[string]any{"result": "ok"}
 			})
-
-			env := newEnv(t, nil, exposerStub)
 			session := env.connect(t, nil)
 
 			result := callTool(t, session, "stop_analysis", tt.args)
@@ -631,8 +595,9 @@ func TestMCPStopAnalysis(t *testing.T) {
 			if text := textContent(t, result); text != tt.wantText {
 				t.Errorf("text = %q, want %q", text, tt.wantText)
 			}
-			if len(calls) != 1 || calls[0].path != tt.wantPath {
-				t.Errorf("exposer calls = %+v, want one POST to %s", calls, tt.wantPath)
+			calls := env.terrain.Calls()
+			if len(calls) != 1 || calls[0].Path != tt.wantPath {
+				t.Errorf("terrain calls = %+v, want one POST to %s", calls, tt.wantPath)
 			}
 		})
 	}

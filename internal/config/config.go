@@ -17,9 +17,7 @@ import (
 // Defaults applied when a value is absent from both the environment and the JSON file.
 const (
 	DefaultConfigFile           = "config.json"
-	DefaultAppsBaseURL          = "http://apps"
-	DefaultAppExposerBaseURL    = "http://app-exposer"
-	DefaultPermissionsBaseURL   = "http://permissions"
+	DefaultTerrainBaseURL       = "http://terrain"
 	DefaultUserSuffix           = "@iplantcollaborative.org"
 	DefaultViceDomain           = ".cyverse.run"
 	DefaultPathPrefix           = "/formation"
@@ -33,25 +31,13 @@ const (
 
 // Config holds all formation settings.
 type Config struct {
-	IRODSHost     string
-	IRODSPort     string
-	IRODSUser     string
-	IRODSPassword string
-	IRODSZone     string
-	// IRODSCacheTTL bounds the iRODS client's metadata caches; zero (the
-	// default) disables caching so writes through one replica are immediately
-	// visible through the others.
-	IRODSCacheTTL time.Duration
-
 	KeycloakServerURL    string
 	KeycloakRealm        string
 	KeycloakClientID     string
 	KeycloakClientSecret string
 	KeycloakSSLVerify    bool
 
-	AppsBaseURL        string
-	AppExposerBaseURL  string
-	PermissionsBaseURL string
+	TerrainBaseURL string
 
 	UserSuffix string
 	ViceDomain string
@@ -61,7 +47,7 @@ type Config struct {
 	ViceURLCheckRetries  int
 	ViceURLCheckCacheTTL time.Duration
 
-	// OutputZone is where analysis outputs land; it always mirrors IRODSZone.
+	// OutputZone is the iRODS zone where analysis outputs land.
 	OutputZone string
 
 	ServiceAccountsOnly     bool
@@ -95,25 +81,6 @@ func Load() (*Config, error) {
 
 	cfg := &Config{}
 
-	if cfg.IRODSHost, err = required("IRODS_HOST", irods, "host"); err != nil {
-		return nil, err
-	}
-	if cfg.IRODSPort, err = required("IRODS_PORT", irods, "port"); err != nil {
-		return nil, err
-	}
-	if cfg.IRODSUser, err = required("IRODS_USER", irods, "user"); err != nil {
-		return nil, err
-	}
-	if cfg.IRODSPassword, err = required("IRODS_PASSWORD", irods, "password"); err != nil {
-		return nil, err
-	}
-	if cfg.IRODSZone, err = required("IRODS_ZONE", irods, "zone"); err != nil {
-		return nil, err
-	}
-	if cfg.IRODSCacheTTL, err = duration("IRODS_CACHE_TTL", irods, "cache_ttl", 0); err != nil {
-		return nil, err
-	}
-
 	if cfg.KeycloakServerURL, err = required("KEYCLOAK_SERVER_URL", keycloak, "server_url"); err != nil {
 		return nil, err
 	}
@@ -131,9 +98,7 @@ func Load() (*Config, error) {
 	}
 	cfg.KeycloakSSLVerify = boolValue("KEYCLOAK_SSL_VERIFY", keycloak, "ssl_verify", true)
 
-	cfg.AppsBaseURL = optional("APPS_BASE_URL", services, "apps_base_url", DefaultAppsBaseURL)
-	cfg.AppExposerBaseURL = optional("APP_EXPOSER_BASE_URL", services, "app_exposer_base_url", DefaultAppExposerBaseURL)
-	cfg.PermissionsBaseURL = optional("PERMISSIONS_BASE_URL", services, "permissions_base_url", DefaultPermissionsBaseURL)
+	cfg.TerrainBaseURL = optional("TERRAIN_BASE_URL", services, "terrain_base_url", DefaultTerrainBaseURL)
 
 	cfg.UserSuffix = optional("USER_SUFFIX", app, "user_suffix", DefaultUserSuffix)
 	cfg.ViceDomain = optional("VICE_DOMAIN", app, "vice_domain", DefaultViceDomain)
@@ -156,7 +121,14 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	cfg.OutputZone = cfg.IRODSZone
+	// OUTPUT_ZONE replaces the old IRODS_ZONE-derived value; the irods.zone
+	// JSON key still works as a fallback so existing configs keep loading.
+	cfg.OutputZone = optional("OUTPUT_ZONE", app, "output_zone", "")
+	if cfg.OutputZone == "" {
+		if cfg.OutputZone, err = required("OUTPUT_ZONE", irods, "zone"); err != nil {
+			return nil, err
+		}
+	}
 
 	cfg.ServiceAccountsOnly = boolValue("SERVICE_ACCOUNTS_ONLY", app, "service_accounts_only", false)
 

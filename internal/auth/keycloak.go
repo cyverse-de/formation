@@ -60,13 +60,18 @@ func newHTTPClient(sslVerify bool) *http.Client {
 // PasswordGrant exchanges user credentials for Keycloak's token response,
 // returned verbatim so /login can proxy it to the client.
 func (k *Keycloak) PasswordGrant(ctx context.Context, username, password string) (map[string]any, error) {
-	form := url.Values{
-		"grant_type":    {"password"},
-		"client_id":     {k.clientID},
-		"client_secret": {k.secret},
-		"username":      {username},
-		"password":      {password},
-	}
+	return k.tokenGrant(ctx, url.Values{
+		"grant_type": {"password"},
+		"username":   {username},
+		"password":   {password},
+	})
+}
+
+// tokenGrant posts a grant request (with the client credentials added) to the
+// realm token endpoint and decodes the token response.
+func (k *Keycloak) tokenGrant(ctx context.Context, form url.Values) (map[string]any, error) {
+	form.Set("client_id", k.clientID)
+	form.Set("client_secret", k.secret)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, k.tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {

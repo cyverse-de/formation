@@ -5,7 +5,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/cyverse-de/formation/internal/datastore"
 	"github.com/cyverse-de/formation/internal/handlers"
 )
 
@@ -190,11 +189,11 @@ func formatBatchLaunch(analysisID, jobType string) string {
 
 func formatBrowse(result *handlers.BrowseResult) string {
 	var b strings.Builder
-	if result.Type == datastore.TypeCollection {
+	if result.Type == handlers.TypeCollection {
 		fmt.Fprintf(&b, "**Directory:** `%s`\n\n", result.Path)
-		var dirs, files []datastore.Entry
+		var dirs, files []handlers.Entry
 		for _, entry := range result.Entries {
-			if entry.Type == datastore.TypeCollection {
+			if entry.Type == handlers.TypeCollection {
 				dirs = append(dirs, entry)
 			} else {
 				files = append(files, entry)
@@ -244,7 +243,7 @@ func formatBrowse(result *handlers.BrowseResult) string {
 
 func formatDelete(result map[string]any, recurse bool) string {
 	path := strOr(result, "path", "")
-	isCollection := strOr(result, "type", "") == datastore.TypeCollection
+	isCollection := strOr(result, "type", "") == handlers.TypeCollection
 	itemCount := strOr(result, "item_count", "")
 
 	if dryRun, _ := result["dry_run"].(bool); dryRun {

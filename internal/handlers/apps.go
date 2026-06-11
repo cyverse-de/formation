@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -18,34 +19,38 @@ const listAppsPageSize = 500
 
 // Apps serves the app discovery, launch, and analysis endpoints.
 type Apps struct {
-	apps       *clients.Apps
-	exposer    *clients.AppExposer
+	terrain    *clients.Terrain
 	urls       *vice.URLChecker
 	subdomains *vice.SubdomainResolver
+	callers    *auth.CallerResolver
 
-	userSuffix              string
-	viceDomain              string
-	outputZone              string
-	serviceAccountUsernames map[string]string
+	userSuffix string
+	viceDomain string
+	outputZone string
 }
 
 // NewApps wires the apps handler with its clients and config values.
-func NewApps(appsClient *clients.Apps, exposer *clients.AppExposer, urls *vice.URLChecker, subdomains *vice.SubdomainResolver, cfg *config.Config) *Apps {
+func NewApps(terrainClient *clients.Terrain, urls *vice.URLChecker, subdomains *vice.SubdomainResolver, callers *auth.CallerResolver, cfg *config.Config) *Apps {
 	return &Apps{
-		apps:                    appsClient,
-		exposer:                 exposer,
-		urls:                    urls,
-		subdomains:              subdomains,
-		userSuffix:              cfg.UserSuffix,
-		viceDomain:              cfg.ViceDomain,
-		outputZone:              cfg.OutputZone,
-		serviceAccountUsernames: cfg.ServiceAccountUsernames,
+		terrain:    terrainClient,
+		urls:       urls,
+		subdomains: subdomains,
+		callers:    callers,
+		userSuffix: cfg.UserSuffix,
+		viceDomain: cfg.ViceDomain,
+		outputZone: cfg.OutputZone,
 	}
 }
 
-// username resolves the backend username for the authenticated identity.
-func (h *Apps) username(c echo.Context) (string, error) {
-	return auth.GetInfo(c).UsernameForBackend(h.serviceAccountUsernames)
+// ResolveCaller resolves an authenticated identity into a terrain-ready
+// Caller; exported so the MCP tools share the same resolution.
+func (h *Apps) ResolveCaller(ctx context.Context, info *auth.Info) (*auth.Caller, error) {
+	return h.callers.Resolve(ctx, info)
+}
+
+// caller resolves the request's identity into a terrain-ready Caller.
+func (h *Apps) caller(c echo.Context) (*auth.Caller, error) {
+	return h.callers.Resolve(c.Request().Context(), auth.GetInfo(c))
 }
 
 // JobTypes lists the valid job type values for the GET /apps job_type filter.
@@ -98,7 +103,7 @@ func (h *Apps) List(c echo.Context) error {
 		return apierror.NewValidation("Offset must be non-negative", "offset")
 	}
 
-	username, err := h.username(c)
+	caller, err := h.caller(c)
 	if err != nil {
 		return err
 	}
@@ -124,9 +129,9 @@ func (h *Apps) List(c echo.Context) error {
 	ctx := c.Request().Context()
 	search := c.QueryParam("name")
 
-	// Without client-side filters the apps service can paginate for us.
+	// Without client-side filters the upstream listing can paginate for us.
 	if !filters.active() {
-		result, err := h.ListAppsPage(ctx, username, search, limit, offset)
+		result, err := h.ListAppsPage(ctx, caller, search, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -137,7 +142,7 @@ func (h *Apps) List(c echo.Context) error {
 	// beyond the first upstream page are not lost.
 	var all []map[string]any
 	for upstreamOffset := 0; ; upstreamOffset += listAppsPageSize {
-		response, err := h.apps.ListApps(ctx, username, listAppsPageSize, upstreamOffset, search)
+		response, err := h.terrain.ListApps(ctx, caller.Token, listAppsPageSize, upstreamOffset, search)
 		if err != nil {
 			return err
 		}
@@ -175,11 +180,11 @@ func (h *Apps) List(c echo.Context) error {
 // @Failure 502 {object} map[string]interface{} "Apps service error (including unknown apps)"
 // @Router /apps/{system_id}/{app_id}/parameters [get]
 func (h *Apps) Parameters(c echo.Context) error {
-	username, err := h.username(c)
+	caller, err := h.caller(c)
 	if err != nil {
 		return err
 	}
-	result, err := h.AppParameters(c.Request().Context(), username, c.Param("system_id"), c.Param("app_id"))
+	result, err := h.AppParameters(c.Request().Context(), caller, c.Param("system_id"), c.Param("app_id"))
 	if err != nil {
 		return err
 	}

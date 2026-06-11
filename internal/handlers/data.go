@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"mime"
 	"net/http"
@@ -14,19 +15,19 @@ import (
 
 	"github.com/cyverse-de/formation/internal/apierror"
 	"github.com/cyverse-de/formation/internal/auth"
-	"github.com/cyverse-de/formation/internal/datastore"
+	"github.com/cyverse-de/formation/internal/clients"
 )
 
 const metadataHeaderPrefix = "x-datastore-"
 
 // Data serves the /data browse, upload, and delete endpoints.
 type Data struct {
-	store datastore.Store
+	terrain *clients.Terrain
 }
 
-// NewData wires the data handler with its iRODS store.
-func NewData(store datastore.Store) *Data {
-	return &Data{store: store}
+// NewData wires the data handler with the terrain client.
+func NewData(terrainClient *clients.Terrain) *Data {
+	return &Data{terrain: terrainClient}
 }
 
 // dataPath extracts the iRODS path from the wildcard route parameter,
@@ -42,9 +43,10 @@ func dataPath(c echo.Context) string {
 	return raw
 }
 
-// dataUsername returns the JWT username (preferred_username, then sub).
-func dataUsername(c echo.Context) (string, error) {
-	return auth.GetInfo(c).Claims.Username()
+// dataCaller resolves the /data identity: any valid token acts as a user
+// under its JWT username, and its own token goes to terrain.
+func dataCaller(c echo.Context) (*auth.Caller, error) {
+	return auth.UserCaller(auth.GetInfo(c))
 }
 
 // avuDelimiter returns the avu_delimiter query parameter, defaulting to ",".
@@ -78,16 +80,15 @@ func avuDelimiter(c echo.Context) string {
 // @Router /data/{path} [get]
 func (h *Data) Get(c echo.Context) error {
 	irodsPath := dataPath(c)
-	if !h.store.PathExists(irodsPath) {
-		return apierror.NewNotFound("Path", irodsPath)
-	}
-
-	username, err := dataUsername(c)
+	caller, err := dataCaller(c)
 	if err != nil {
 		return err
 	}
-	if !h.store.UserCanRead(username, irodsPath) {
-		return apierror.NewPermissionDenied("")
+	ctx := c.Request().Context()
+
+	st, err := h.statPath(ctx, caller.Token, irodsPath)
+	if err != nil {
+		return err
 	}
 
 	includeMetadata, err := boolQueryParam(c, "include_metadata", false)
@@ -96,7 +97,7 @@ func (h *Data) Get(c echo.Context) error {
 	}
 	delimiter := avuDelimiter(c)
 
-	if h.store.FileExists(irodsPath) {
+	if !st.IsDirectory() {
 		offset, err := intQueryParam(c, "offset", 0)
 		if err != nil {
 			return err
@@ -106,16 +107,11 @@ func (h *Data) Get(c echo.Context) error {
 			return err
 		}
 
-		handle, err := h.store.OpenFile(irodsPath)
+		handle, err := h.openRange(ctx, caller.Token, irodsPath, offset)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = handle.Close() }()
-		if offset > 0 {
-			if _, err := handle.Seek(int64(offset), io.SeekStart); err != nil {
-				return err
-			}
-		}
 		var reader io.Reader = handle
 		if limit > 0 {
 			reader = io.LimitReader(handle, int64(limit))
@@ -127,7 +123,7 @@ func (h *Data) Get(c echo.Context) error {
 		}
 
 		if includeMetadata {
-			h.writeMetadataHeaders(c, irodsPath, delimiter)
+			h.writeMetadataHeaders(ctx, c, caller.Token, st.ID, delimiter)
 		}
 		// Unlike the Python version (which buffered whole files in memory),
 		// file contents are streamed.
@@ -135,16 +131,16 @@ func (h *Data) Get(c echo.Context) error {
 	}
 
 	// It's a collection: paging parameters are ignored, like Python.
-	entries, err := h.store.ListCollection(irodsPath)
+	entries, err := h.listEntries(ctx, caller.Token, irodsPath)
 	if err != nil {
 		return err
 	}
 	if includeMetadata {
-		h.writeMetadataHeaders(c, irodsPath, delimiter)
+		h.writeMetadataHeaders(ctx, c, caller.Token, st.ID, delimiter)
 	}
 	return c.JSON(http.StatusOK, map[string]any{
 		"path":     irodsPath,
-		"type":     datastore.TypeCollection,
+		"type":     TypeCollection,
 		"contents": entries,
 	})
 }
@@ -152,8 +148,8 @@ func (h *Data) Get(c echo.Context) error {
 // writeMetadataHeaders adds X-Datastore-{attribute} response headers,
 // swallowing lookup errors like the Python metadata helpers. Headers are
 // written directly into the header map to preserve the iRODS attribute case.
-func (h *Data) writeMetadataHeaders(c echo.Context, irodsPath, delimiter string) {
-	avus, err := h.store.Metadata(irodsPath)
+func (h *Data) writeMetadataHeaders(ctx context.Context, c echo.Context, token, dataID, delimiter string) {
+	avus, err := h.pathMetadata(ctx, token, dataID)
 	if err != nil {
 		return
 	}
@@ -192,10 +188,11 @@ func (h *Data) writeMetadataHeaders(c echo.Context, irodsPath, delimiter string)
 // @Router /data/{path} [put]
 func (h *Data) Put(c echo.Context) error {
 	irodsPath := dataPath(c)
-	username, err := dataUsername(c)
+	caller, err := dataCaller(c)
 	if err != nil {
 		return err
 	}
+	ctx := c.Request().Context()
 
 	replaceMetadata, err := boolQueryParam(c, "replace_metadata", false)
 	if err != nil {
@@ -208,17 +205,26 @@ func (h *Data) Put(c echo.Context) error {
 		return err
 	}
 
+	if hasContent {
+		result, err := h.UploadFile(ctx, caller.Token, irodsPath, body, metadata, replaceMetadata)
+		if err != nil {
+			return err
+		}
+		return c.JSON(http.StatusOK, result)
+	}
+
 	var result map[string]any
-	switch {
-	case hasContent:
-		result, err = h.UploadFile(username, irodsPath, body, metadata, replaceMetadata)
-	case h.store.PathExists(irodsPath):
+	switch _, statErr := h.terrain.Stat(ctx, caller.Token, irodsPath); {
+	case statErr == nil:
 		// Metadata-only update on an existing file or collection.
-		result, err = h.UpdateMetadata(username, irodsPath, metadata, replaceMetadata)
-	case c.QueryParam("resource_type") == "directory":
-		result, err = h.MakeDirectory(username, irodsPath, metadata, replaceMetadata)
+		result, err = h.UpdateMetadata(ctx, caller.Token, irodsPath, metadata, replaceMetadata)
+	case upstreamStatus(statErr) == http.StatusNotFound:
+		if c.QueryParam("resource_type") != "directory" {
+			return apierror.NewBadRequest("Cannot determine operation: provide file content or type=directory parameter")
+		}
+		result, err = h.MakeDirectory(ctx, caller.Token, irodsPath, metadata, replaceMetadata)
 	default:
-		return apierror.NewBadRequest("Cannot determine operation: provide file content or type=directory parameter")
+		return mapDataError(statErr, irodsPath, "Path")
 	}
 	if err != nil {
 		return err
@@ -256,8 +262,8 @@ func requestBody(c echo.Context) (io.Reader, bool, error) {
 // AVUs, splitting value and units on the delimiter. Attribute names are
 // lowercased, matching the Python version (Starlette lowercases all request
 // header names). Results are sorted by attribute for deterministic ordering.
-func metadataFromHeaders(headers http.Header, delimiter string) []datastore.AVU {
-	avus := make([]datastore.AVU, 0, len(headers))
+func metadataFromHeaders(headers http.Header, delimiter string) []AVU {
+	avus := make([]AVU, 0, len(headers))
 	for name, values := range headers {
 		lower := strings.ToLower(name)
 		if !strings.HasPrefix(lower, metadataHeaderPrefix) || len(values) == 0 {
@@ -273,9 +279,9 @@ func metadataFromHeaders(headers http.Header, delimiter string) []datastore.AVU 
 				value, units = split[0], split[1]
 			}
 		}
-		avus = append(avus, datastore.AVU{Attribute: attribute, Value: value, Units: units})
+		avus = append(avus, AVU{Attribute: attribute, Value: value, Units: units})
 	}
-	slices.SortFunc(avus, func(a, b datastore.AVU) int { return strings.Compare(a.Attribute, b.Attribute) })
+	slices.SortFunc(avus, func(a, b AVU) int { return strings.Compare(a.Attribute, b.Attribute) })
 	return avus
 }
 
@@ -298,7 +304,7 @@ func metadataFromHeaders(headers http.Header, delimiter string) []datastore.AVU 
 // @Router /data/{path} [delete]
 func (h *Data) Delete(c echo.Context) error {
 	irodsPath := dataPath(c)
-	username, err := dataUsername(c)
+	caller, err := dataCaller(c)
 	if err != nil {
 		return err
 	}
@@ -311,7 +317,7 @@ func (h *Data) Delete(c echo.Context) error {
 		return err
 	}
 
-	result, err := h.DeletePath(username, irodsPath, recurse, dryRun)
+	result, err := h.DeletePath(c.Request().Context(), caller.Token, irodsPath, recurse, dryRun)
 	if err != nil {
 		return err
 	}

@@ -161,39 +161,39 @@ func isConnectError(err error) bool {
 	return errors.Is(err, syscall.ECONNREFUSED) || errors.As(err, &dnsErr)
 }
 
-// SubdomainResolver looks up the subdomain for a VICE analysis via
-// app-exposer, retrying while the deployment's async data is not ready.
+// SubdomainResolver looks up the subdomain for a VICE analysis via terrain,
+// retrying while the deployment's async data is not ready.
 type SubdomainResolver struct {
-	exposer    *clients.AppExposer
+	terrain    *clients.Terrain
 	maxRetries int
 	retryDelay time.Duration
 }
 
 // NewSubdomainResolver uses the Python defaults of 5 retries, 1s apart.
-func NewSubdomainResolver(exposer *clients.AppExposer) *SubdomainResolver {
-	return &SubdomainResolver{exposer: exposer, maxRetries: 5, retryDelay: time.Second}
+func NewSubdomainResolver(terrain *clients.Terrain) *SubdomainResolver {
+	return &SubdomainResolver{terrain: terrain, maxRetries: 5, retryDelay: time.Second}
 }
 
 // NewSubdomainResolverWithRetries allows tests to shorten the retry loop.
-func NewSubdomainResolverWithRetries(exposer *clients.AppExposer, maxRetries int, retryDelay time.Duration) *SubdomainResolver {
-	return &SubdomainResolver{exposer: exposer, maxRetries: maxRetries, retryDelay: retryDelay}
+func NewSubdomainResolverWithRetries(terrain *clients.Terrain, maxRetries int, retryDelay time.Duration) *SubdomainResolver {
+	return &SubdomainResolver{terrain: terrain, maxRetries: maxRetries, retryDelay: retryDelay}
 }
 
 // Resolve returns the analysis subdomain, or "" if it cannot be determined.
 // All failures are swallowed (logged upstream as needed) like the Python
 // helper, since a missing subdomain just means no URL in the response.
-func (r *SubdomainResolver) Resolve(ctx context.Context, analysisID string) string {
-	externalIDResponse, err := r.exposer.GetExternalID(ctx, analysisID)
+func (r *SubdomainResolver) Resolve(ctx context.Context, token, analysisID string) string {
+	externalIDResponse, err := r.terrain.GetExternalID(ctx, token, analysisID)
 	if err != nil {
 		return ""
 	}
-	externalID, _ := externalIDResponse["external_id"].(string)
+	externalID, _ := externalIDResponse["externalID"].(string)
 	if externalID == "" {
 		return ""
 	}
 
 	for attempt := range r.maxRetries {
-		asyncData, err := r.exposer.GetAsyncData(ctx, externalID)
+		asyncData, err := r.terrain.GetAsyncData(ctx, token, externalID)
 		if err != nil {
 			// 404 means the deployment is not ready yet; retry after a delay.
 			var upstream *apierror.UpstreamError

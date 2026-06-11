@@ -29,7 +29,7 @@ import (
 // @Success 200 {object} map[string]interface{} "analyses with analysis_id, name, app_id, system_id, and status"
 // @Router /apps/analyses/ [get]
 func (h *Apps) ListAnalyses(c echo.Context) error {
-	username, err := h.username(c)
+	caller, err := h.caller(c)
 	if err != nil {
 		return err
 	}
@@ -39,7 +39,7 @@ func (h *Apps) ListAnalyses(c echo.Context) error {
 		status = c.QueryParam("status")
 	}
 
-	analyses, err := h.AnalysesForUser(c.Request().Context(), username, status)
+	analyses, err := h.AnalysesForUser(c.Request().Context(), caller, status)
 	if err != nil {
 		return err
 	}
@@ -56,14 +56,14 @@ func (h *Apps) ListAnalyses(c echo.Context) error {
 // @Param analysis_id path string true "Analysis UUID"
 // @Success 200 {object} map[string]interface{} "analysis_id, status, url_ready, plus url and url_check_details when a subdomain exists"
 // @Failure 400 {object} map[string]interface{} "Invalid analysis ID format"
-// @Failure 502 {object} map[string]interface{} "Apps service error (including unknown analyses)"
+// @Failure 502 {object} map[string]interface{} "Terrain service error (including unknown analyses)"
 // @Router /apps/analyses/{analysis_id}/status [get]
 func (h *Apps) Status(c echo.Context) error {
-	username, err := h.username(c)
+	caller, err := h.caller(c)
 	if err != nil {
 		return err
 	}
-	result, err := h.AnalysisStatus(c.Request().Context(), username, c.Param("analysis_id"))
+	result, err := h.AnalysisStatus(c.Request().Context(), caller, c.Param("analysis_id"))
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,11 @@ func (h *Apps) Status(c echo.Context) error {
 // @Failure 400 {object} map[string]interface{} "Invalid operation or analysis ID"
 // @Router /apps/analyses/{analysis_id}/control [post]
 func (h *Apps) Control(c echo.Context) error {
-	result, err := h.ControlAnalysis(c.Request().Context(), c.Param("analysis_id"), c.QueryParam("operation"))
+	caller, err := h.caller(c)
+	if err != nil {
+		return err
+	}
+	result, err := h.ControlAnalysis(c.Request().Context(), caller, c.Param("analysis_id"), c.QueryParam("operation"))
 	if err != nil {
 		return err
 	}
@@ -92,19 +96,19 @@ func (h *Apps) Control(c echo.Context) error {
 }
 
 // Details serves GET /apps/analyses/{analysis_id}/details, returning the full
-// analysis record from the apps service.
+// analysis record from terrain.
 //
 // @Summary Get an analysis's full details
 // @Tags Analyses
 // @Security BearerAuth
 // @Produce json
 // @Param analysis_id path string true "Analysis UUID"
-// @Success 200 {object} map[string]interface{} "The analysis record as returned by the apps service"
+// @Success 200 {object} map[string]interface{} "The analysis record as returned by the DE backend"
 // @Failure 400 {object} map[string]interface{} "Invalid analysis ID format"
-// @Failure 502 {object} map[string]interface{} "Apps service error (including unknown analyses)"
+// @Failure 502 {object} map[string]interface{} "Terrain service error (including unknown analyses)"
 // @Router /apps/analyses/{analysis_id}/details [get]
 func (h *Apps) Details(c echo.Context) error {
-	username, err := h.username(c)
+	caller, err := h.caller(c)
 	if err != nil {
 		return err
 	}
@@ -113,7 +117,7 @@ func (h *Apps) Details(c echo.Context) error {
 		return err
 	}
 
-	analysis, err := h.apps.GetAnalysis(c.Request().Context(), analysisID, username)
+	analysis, err := h.terrain.GetAnalysis(c.Request().Context(), caller.Token, analysisID)
 	if err != nil {
 		return err
 	}
@@ -124,7 +128,6 @@ func (h *Apps) Details(c echo.Context) error {
 // the handler accepts arbitrary submission JSON and fills in defaults.
 type LaunchSubmission struct {
 	Name         string           `json:"name,omitempty"`
-	Email        string           `json:"email,omitempty"`
 	Debug        bool             `json:"debug,omitempty"`
 	Notify       bool             `json:"notify,omitempty"`
 	OutputDir    string           `json:"output_dir,omitempty"`
@@ -136,8 +139,8 @@ type LaunchSubmission struct {
 //
 // @Summary Launch an app
 // @Description Submits an analysis. The body is optional; missing fields get defaults: a generated
-// @Description analysis name, an output directory under the user's home, the email from the JWT,
-// @Description debug=false, and notify=true. Swagger UI placeholder values are stripped.
+// @Description analysis name, an output directory under the user's home, debug=false, and notify=true.
+// @Description Swagger UI placeholder values are stripped. Notification email comes from the token.
 // @Tags Apps
 // @Security BearerAuth
 // @Accept json
@@ -150,7 +153,10 @@ type LaunchSubmission struct {
 // @Failure 400 {object} map[string]interface{} "Invalid app ID or request body"
 // @Router /app/launch/{system_id}/{app_id} [post]
 func (h *Apps) Launch(c echo.Context) error {
-	info := auth.GetInfo(c)
+	caller, err := h.caller(c)
+	if err != nil {
+		return err
+	}
 
 	outputZone := h.outputZone
 	if c.QueryParams().Has("output_zone") {
@@ -167,7 +173,7 @@ func (h *Apps) Launch(c echo.Context) error {
 		return err
 	}
 
-	result, err := h.LaunchAnalysis(c.Request().Context(), info, c.Param("system_id"), appID, outputZone, submission)
+	result, err := h.LaunchAnalysis(c.Request().Context(), caller, c.Param("system_id"), appID, outputZone, submission)
 	if err != nil {
 		return err
 	}
@@ -192,14 +198,15 @@ func readSubmission(c echo.Context) (map[string]any, error) {
 	return submission, nil
 }
 
-// prepareSubmission fills in submission defaults: resolved email (returned
-// separately for the query parameter), system_id, debug/notify/config,
-// generated analysis name and output directory, and removal of Swagger
-// placeholder requirements. Mirrors the Python prepare_submission_dict.
-func (h *Apps) prepareSubmission(ctx context.Context, submission map[string]any, appID, systemID string, info *auth.Info, username, outputZone string) (map[string]any, string) {
+// prepareSubmission fills in submission defaults: system_id, debug/notify/
+// config, generated analysis name and output directory, and removal of Swagger
+// placeholder requirements. Mirrors the Python prepare_submission_dict, except
+// the email moves nowhere: terrain derives it from the forwarded token, so a
+// body-supplied email is stripped rather than promoted to a query parameter.
+func (h *Apps) prepareSubmission(ctx context.Context, submission map[string]any, appID, systemID string, caller *auth.Caller, outputZone string) map[string]any {
 	submission["app_id"] = appID
 
-	submission["email"] = h.resolveEmail(submission["email"], info, username)
+	delete(submission, "email")
 
 	if isPlaceholder(submission["system_id"]) {
 		submission["system_id"] = systemID
@@ -210,7 +217,7 @@ func (h *Apps) prepareSubmission(ctx context.Context, submission map[string]any,
 	setDefault(submission, "config", map[string]any{})
 
 	if isPlaceholder(submission["name"]) {
-		submission["name"] = h.generateAnalysisName(ctx, appID, username, systemID)
+		submission["name"] = h.generateAnalysisName(ctx, caller, appID, systemID)
 	}
 
 	if isPlaceholder(submission["output_dir"]) {
@@ -218,38 +225,24 @@ func (h *Apps) prepareSubmission(ctx context.Context, submission map[string]any,
 		if name == "" {
 			name = "analysis"
 		}
-		submission["output_dir"] = fmt.Sprintf("/%s/home/%s/analyses/%s", outputZone, username, name)
+		submission["output_dir"] = fmt.Sprintf("/%s/home/%s/analyses/%s", outputZone, caller.Username, name)
 	}
 
 	if hasPlaceholderRequirements(submission["requirements"]) {
 		delete(submission, "requirements")
 	}
 
-	email := fmt.Sprint(submission["email"])
-	delete(submission, "email")
-	return submission, email
-}
-
-// resolveEmail picks the email in priority order: request body, JWT claim,
-// then username + the configured suffix.
-func (h *Apps) resolveEmail(fromBody any, info *auth.Info, username string) any {
-	if !isPlaceholder(fromBody) {
-		return fromBody
-	}
-	if info.Type == auth.TypeUser && info.Claims.Email != nil && *info.Claims.Email != "" {
-		return *info.Claims.Email
-	}
-	return username + h.userSuffix
+	return submission
 }
 
 var analysisNameClean = regexp.MustCompile(`[^a-z0-9-]+`)
 
 // generateAnalysisName builds "{cleaned-app-name}-{timestamp}", falling back
 // to "analysis" when the app name cannot be fetched.
-func (h *Apps) generateAnalysisName(ctx context.Context, appID, username, systemID string) string {
+func (h *Apps) generateAnalysisName(ctx context.Context, caller *auth.Caller, appID, systemID string) string {
 	cleaned := "analysis"
 	if appID != "" {
-		if appData, err := h.apps.GetApp(ctx, systemID, appID, username); err == nil {
+		if appData, err := h.terrain.GetApp(ctx, caller.Token, systemID, appID); err == nil {
 			if name, ok := appData["name"].(string); ok {
 				cleaned = strings.Trim(analysisNameClean.ReplaceAllString(strings.ToLower(name), "-"), "-")
 			}

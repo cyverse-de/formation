@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -102,6 +103,49 @@ func (k *Keycloak) Token(t *testing.T, claims map[string]any) string {
 		t.Fatal(err)
 	}
 	return signed
+}
+
+// TokenExchange records the impersonation tokens issued by ServeTokenExchange.
+type TokenExchange struct {
+	mu     sync.Mutex
+	issued map[string]string
+}
+
+// IssuedFor returns the token issued for a requested_subject, or "" if the
+// subject was never exchanged.
+func (x *TokenExchange) IssuedFor(subject string) string {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return x.issued[subject]
+}
+
+// ServeTokenExchange installs a TokenHandler implementing the RFC 8693
+// token-exchange grant: it signs a user token for the requested_subject and
+// records it for assertions.
+func (k *Keycloak) ServeTokenExchange(t *testing.T) *TokenExchange {
+	t.Helper()
+
+	exchange := &TokenExchange{issued: map[string]string{}}
+	k.TokenHandler = func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if got := r.Form.Get("grant_type"); got != "urn:ietf:params:oauth:grant-type:token-exchange" {
+			http.Error(w, "unexpected grant_type "+got, http.StatusBadRequest)
+			return
+		}
+		if r.Form.Get("subject_token") == "" {
+			http.Error(w, "missing subject_token", http.StatusBadRequest)
+			return
+		}
+		subject := r.Form.Get("requested_subject")
+		token := k.Token(t, map[string]any{"preferred_username": subject})
+
+		exchange.mu.Lock()
+		exchange.issued[subject] = token
+		exchange.mu.Unlock()
+
+		writeJSON(w, map[string]any{"access_token": token, "expires_in": 300})
+	}
+	return exchange
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

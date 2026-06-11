@@ -16,10 +16,12 @@ const (
 	TypeServiceAccount = "service_account"
 )
 
-// Info is the authenticated identity stored on the Echo context.
+// Info is the authenticated identity stored on the Echo context. Token holds
+// the raw bearer token so backend calls to terrain can forward it.
 type Info struct {
 	Type   string
 	Claims *Claims
+	Token  string
 }
 
 // GetInfo returns the identity placed on the context by the auth middlewares.
@@ -57,21 +59,22 @@ func bearerToken(c echo.Context) (string, error) {
 	return token, nil
 }
 
-// verify maps verification failures to the Python 401 messages.
-func verify(c echo.Context, v *Verifier) (*Claims, error) {
+// verify maps verification failures to the Python 401 messages, returning the
+// verified claims along with the raw token for forwarding to terrain.
+func verify(c echo.Context, v *Verifier) (*Claims, string, error) {
 	token, err := bearerToken(c)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	claims, err := v.Verify(c.Request().Context(), token)
 	if err != nil {
 		var discoveryErr *DiscoveryError
 		if errors.As(err, &discoveryErr) {
-			return nil, echo.NewHTTPError(http.StatusUnauthorized, "Authentication error: "+err.Error())
+			return nil, "", echo.NewHTTPError(http.StatusUnauthorized, "Authentication error: "+err.Error())
 		}
-		return nil, echo.NewHTTPError(http.StatusUnauthorized, "Token validation failed: "+err.Error())
+		return nil, "", echo.NewHTTPError(http.StatusUnauthorized, "Token validation failed: "+err.Error())
 	}
-	return claims, nil
+	return claims, token, nil
 }
 
 // RequireUser accepts any valid token and stores the identity as a user,
@@ -79,11 +82,11 @@ func verify(c echo.Context, v *Verifier) (*Claims, error) {
 func RequireUser(v *Verifier) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			claims, err := verify(c, v)
+			claims, token, err := verify(c, v)
 			if err != nil {
 				return err
 			}
-			c.Set(infoContextKey, &Info{Type: TypeUser, Claims: claims})
+			c.Set(infoContextKey, &Info{Type: TypeUser, Claims: claims, Token: token})
 			return next(c)
 		}
 	}
@@ -95,7 +98,7 @@ func RequireUser(v *Verifier) echo.MiddlewareFunc {
 func RequireUserOrServiceAccount(v *Verifier, serviceAccountsOnly bool) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			claims, err := verify(c, v)
+			claims, token, err := verify(c, v)
 			if err != nil {
 				return err
 			}
@@ -105,7 +108,7 @@ func RequireUserOrServiceAccount(v *Verifier, serviceAccountsOnly bool) echo.Mid
 					return echo.NewHTTPError(http.StatusForbidden,
 						`Service account missing required role: "app-runner"`)
 				}
-				c.Set(infoContextKey, &Info{Type: TypeServiceAccount, Claims: claims})
+				c.Set(infoContextKey, &Info{Type: TypeServiceAccount, Claims: claims, Token: token})
 				return next(c)
 			}
 
@@ -114,7 +117,7 @@ func RequireUserOrServiceAccount(v *Verifier, serviceAccountsOnly bool) echo.Mid
 					"Service accounts only mode: regular user authentication is disabled")
 			}
 
-			c.Set(infoContextKey, &Info{Type: TypeUser, Claims: claims})
+			c.Set(infoContextKey, &Info{Type: TypeUser, Claims: claims, Token: token})
 			return next(c)
 		}
 	}

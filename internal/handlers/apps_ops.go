@@ -13,8 +13,8 @@ import (
 
 // ListAppsPage returns one upstream page of apps, formatted for responses,
 // along with the upstream total.
-func (h *Apps) ListAppsPage(ctx context.Context, username, search string, limit, offset int) (map[string]any, error) {
-	response, err := h.apps.ListApps(ctx, username, limit, offset, search)
+func (h *Apps) ListAppsPage(ctx context.Context, caller *auth.Caller, search string, limit, offset int) (map[string]any, error) {
+	response, err := h.terrain.ListApps(ctx, caller.Token, limit, offset, search)
 	if err != nil {
 		return nil, err
 	}
@@ -25,13 +25,13 @@ func (h *Apps) ListAppsPage(ctx context.Context, username, search string, limit,
 }
 
 // AppParameters returns an app's parameter groups and overall job type.
-func (h *Apps) AppParameters(ctx context.Context, username, systemID, rawAppID string) (map[string]any, error) {
+func (h *Apps) AppParameters(ctx context.Context, caller *auth.Caller, systemID, rawAppID string) (map[string]any, error) {
 	appID, err := validateUUID(rawAppID, "app_id")
 	if err != nil {
 		return nil, err
 	}
 
-	appData, err := h.apps.GetApp(ctx, systemID, appID, username)
+	appData, err := h.terrain.GetApp(ctx, caller.Token, systemID, appID)
 	if err != nil {
 		return nil, err
 	}
@@ -46,10 +46,10 @@ func (h *Apps) AppParameters(ctx context.Context, username, systemID, rawAppID s
 	}, nil
 }
 
-// AnalysesForUser lists the user's analyses filtered by status (empty status
+// AnalysesForUser lists the caller's analyses filtered by status (empty status
 // lists all), reshaped to the formation summary fields.
-func (h *Apps) AnalysesForUser(ctx context.Context, username, status string) ([]map[string]any, error) {
-	result, err := h.apps.ListAnalyses(ctx, username, status)
+func (h *Apps) AnalysesForUser(ctx context.Context, caller *auth.Caller, status string) ([]map[string]any, error) {
+	result, err := h.terrain.ListAnalyses(ctx, caller.Token, status)
 	if err != nil {
 		return nil, err
 	}
@@ -74,18 +74,18 @@ func (h *Apps) AnalysesForUser(ctx context.Context, username, status string) ([]
 
 // AnalysisStatus returns an analysis's status, probing the VICE URL for
 // readiness when a subdomain exists.
-func (h *Apps) AnalysisStatus(ctx context.Context, username, rawAnalysisID string) (map[string]any, error) {
+func (h *Apps) AnalysisStatus(ctx context.Context, caller *auth.Caller, rawAnalysisID string) (map[string]any, error) {
 	analysisID, err := validateUUID(rawAnalysisID, "analysis_id")
 	if err != nil {
 		return nil, err
 	}
 
-	analysis, err := h.apps.GetAnalysis(ctx, analysisID, username)
+	analysis, err := h.terrain.GetAnalysis(ctx, caller.Token, analysisID)
 	if err != nil {
 		return nil, err
 	}
 
-	subdomain := h.subdomains.Resolve(ctx, analysisID)
+	subdomain := h.subdomains.Resolve(ctx, caller.Token, analysisID)
 	urlReady := false
 	var urlCheckDetails map[string]any
 	if subdomain != "" {
@@ -108,7 +108,7 @@ func (h *Apps) AnalysisStatus(ctx context.Context, username, rawAnalysisID strin
 
 // ControlAnalysis performs the extend_time, save_and_exit, or exit operation
 // on a running VICE analysis.
-func (h *Apps) ControlAnalysis(ctx context.Context, rawAnalysisID, operation string) (map[string]any, error) {
+func (h *Apps) ControlAnalysis(ctx context.Context, caller *auth.Caller, rawAnalysisID, operation string) (map[string]any, error) {
 	if operation != "extend_time" && operation != "save_and_exit" && operation != "exit" {
 		return nil, apierror.NewValidation(
 			"Invalid operation. Must be one of: extend_time, save_and_exit, exit", "operation")
@@ -122,11 +122,11 @@ func (h *Apps) ControlAnalysis(ctx context.Context, rawAnalysisID, operation str
 	var result map[string]any
 	switch operation {
 	case "extend_time":
-		result, err = h.exposer.ExtendTimeLimit(ctx, analysisID)
+		result, err = h.terrain.ExtendTimeLimit(ctx, caller.Token, analysisID)
 	case "save_and_exit":
-		result, err = h.exposer.SaveAndExit(ctx, analysisID)
+		result, err = h.terrain.SaveAndExit(ctx, caller.Token, analysisID)
 	default:
-		result, err = h.exposer.ExitWithoutSave(ctx, analysisID)
+		result, err = h.terrain.ExitWithoutSave(ctx, caller.Token, analysisID)
 	}
 	if err != nil {
 		return nil, err
@@ -138,20 +138,15 @@ func (h *Apps) ControlAnalysis(ctx context.Context, rawAnalysisID, operation str
 
 // LaunchAnalysis fills in submission defaults and submits the analysis,
 // returning the summary (analysis_id, name, status, and url for VICE apps).
-func (h *Apps) LaunchAnalysis(ctx context.Context, info *auth.Info, systemID, rawAppID, outputZone string, submission map[string]any) (map[string]any, error) {
-	username, err := info.UsernameForBackend(h.serviceAccountUsernames)
-	if err != nil {
-		return nil, err
-	}
-
+func (h *Apps) LaunchAnalysis(ctx context.Context, caller *auth.Caller, systemID, rawAppID, outputZone string, submission map[string]any) (map[string]any, error) {
 	appID, err := validateUUID(rawAppID, "app_id")
 	if err != nil {
 		return nil, err
 	}
 
-	prepared, email := h.prepareSubmission(ctx, submission, appID, systemID, info, username, outputZone)
+	prepared := h.prepareSubmission(ctx, submission, appID, systemID, caller, outputZone)
 
-	response, err := h.apps.SubmitAnalysis(ctx, prepared, username, email)
+	response, err := h.terrain.SubmitAnalysis(ctx, caller.Token, prepared)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +158,7 @@ func (h *Apps) LaunchAnalysis(ctx context.Context, info *auth.Info, systemID, ra
 	}
 
 	if analysisID, ok := response["id"].(string); ok && analysisID != "" {
-		if subdomain := h.subdomains.Resolve(ctx, analysisID); subdomain != "" {
+		if subdomain := h.subdomains.Resolve(ctx, caller.Token, analysisID); subdomain != "" {
 			result["url"] = h.viceURL(subdomain)
 		}
 	}

@@ -8,7 +8,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/cyverse-de/formation/internal/datastore"
+	"github.com/cyverse-de/formation/internal/handlers"
 )
 
 type browseDataInput struct {
@@ -84,49 +84,49 @@ func irodsPath(p string) string {
 // avusFromMap converts tool metadata to AVUs the same way the REST API reads
 // X-Datastore-* headers: attribute names lowercased, values split into value
 // and units on the first comma, sorted by attribute.
-func avusFromMap(metadata map[string]string) []datastore.AVU {
-	avus := make([]datastore.AVU, 0, len(metadata))
+func avusFromMap(metadata map[string]string) []handlers.AVU {
+	avus := make([]handlers.AVU, 0, len(metadata))
 	for attribute, value := range metadata {
 		units := ""
 		if split := strings.SplitN(value, ",", 2); len(split) == 2 {
 			value, units = split[0], split[1]
 		}
-		avus = append(avus, datastore.AVU{Attribute: strings.ToLower(attribute), Value: value, Units: units})
+		avus = append(avus, handlers.AVU{Attribute: strings.ToLower(attribute), Value: value, Units: units})
 	}
-	slices.SortFunc(avus, func(a, b datastore.AVU) int { return strings.Compare(a.Attribute, b.Attribute) })
+	slices.SortFunc(avus, func(a, b handlers.AVU) int { return strings.Compare(a.Attribute, b.Attribute) })
 	return avus
 }
 
-func (s *server) browseData(_ context.Context, req *sdk.CallToolRequest, in browseDataInput) (*sdk.CallToolResult, error) {
-	username, err := dataUsername(req)
+func (s *server) browseData(ctx context.Context, req *sdk.CallToolRequest, in browseDataInput) (*sdk.CallToolResult, error) {
+	caller, err := dataCaller(req)
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.data.Browse(username, irodsPath(in.Path), in.Offset, in.Limit, in.IncludeMetadata, s.cfg.MCPBrowseByteLimit)
+	result, err := s.data.Browse(ctx, caller.Token, irodsPath(in.Path), in.Offset, in.Limit, in.IncludeMetadata, s.cfg.MCPBrowseByteLimit)
 	if err != nil {
 		return nil, err
 	}
 	return textResult(formatBrowse(result)), nil
 }
 
-func (s *server) createDirectory(_ context.Context, req *sdk.CallToolRequest, in createDirectoryInput) (*sdk.CallToolResult, error) {
-	username, err := dataUsername(req)
+func (s *server) createDirectory(ctx context.Context, req *sdk.CallToolRequest, in createDirectoryInput) (*sdk.CallToolResult, error) {
+	caller, err := dataCaller(req)
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.data.MakeDirectory(username, irodsPath(in.Path), avusFromMap(in.Metadata), false)
+	result, err := s.data.MakeDirectory(ctx, caller.Token, irodsPath(in.Path), avusFromMap(in.Metadata), false)
 	if err != nil {
 		return nil, err
 	}
 	return textResult(fmt.Sprintf("Directory created: `%s`", strOr(result, "path", ""))), nil
 }
 
-func (s *server) uploadFile(_ context.Context, req *sdk.CallToolRequest, in uploadFileInput) (*sdk.CallToolResult, error) {
-	username, err := dataUsername(req)
+func (s *server) uploadFile(ctx context.Context, req *sdk.CallToolRequest, in uploadFileInput) (*sdk.CallToolResult, error) {
+	caller, err := dataCaller(req)
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.data.UploadFile(username, irodsPath(in.Path), strings.NewReader(in.Content), avusFromMap(in.Metadata), false)
+	result, err := s.data.UploadFile(ctx, caller.Token, irodsPath(in.Path), strings.NewReader(in.Content), avusFromMap(in.Metadata), false)
 	if err != nil {
 		return nil, err
 	}
@@ -138,12 +138,12 @@ func (s *server) uploadFile(_ context.Context, req *sdk.CallToolRequest, in uplo
 	return textResult(fmt.Sprintf("File %s: `%s`", action, strOr(result, "path", ""))), nil
 }
 
-func (s *server) setMetadata(_ context.Context, req *sdk.CallToolRequest, in setMetadataInput) (*sdk.CallToolResult, error) {
-	username, err := dataUsername(req)
+func (s *server) setMetadata(ctx context.Context, req *sdk.CallToolRequest, in setMetadataInput) (*sdk.CallToolResult, error) {
+	caller, err := dataCaller(req)
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.data.UpdateMetadata(username, irodsPath(in.Path), avusFromMap(in.Metadata), in.Replace)
+	result, err := s.data.UpdateMetadata(ctx, caller.Token, irodsPath(in.Path), avusFromMap(in.Metadata), in.Replace)
 	if err != nil {
 		return nil, err
 	}
@@ -155,12 +155,12 @@ func (s *server) setMetadata(_ context.Context, req *sdk.CallToolRequest, in set
 	return textResult(fmt.Sprintf("Metadata %s for: `%s`", action, strOr(result, "path", ""))), nil
 }
 
-func (s *server) deleteData(_ context.Context, req *sdk.CallToolRequest, in deleteDataInput) (*sdk.CallToolResult, error) {
-	username, err := dataUsername(req)
+func (s *server) deleteData(ctx context.Context, req *sdk.CallToolRequest, in deleteDataInput) (*sdk.CallToolResult, error) {
+	caller, err := dataCaller(req)
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.data.DeletePath(username, irodsPath(in.Path), in.Recurse, in.DryRun)
+	result, err := s.data.DeletePath(ctx, caller.Token, irodsPath(in.Path), in.Recurse, in.DryRun)
 	if err != nil {
 		return nil, err
 	}

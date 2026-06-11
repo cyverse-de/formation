@@ -1,6 +1,6 @@
 # Formation
 
-Formation is a Go service that provides authenticated access to CyVerse Discovery Environment apps and iRODS data storage with integrated Keycloak authentication. It serves as a bridge between web applications and the DE backend services, offering RESTful APIs for app discovery and launching, analysis management, file browsing, content retrieval, and metadata access.
+Formation is a Go service that provides authenticated access to CyVerse Discovery Environment apps and iRODS data storage with integrated Keycloak authentication. It fronts the [terrain](https://github.com/cyverse-de/terrain) API gateway — forwarding each caller's Keycloak token so terrain enforces authorization — and offers RESTful APIs for app discovery and launching, analysis management, file browsing, content retrieval, and metadata access.
 
 ## Features
 
@@ -19,9 +19,8 @@ Formation is a Go service that provides authenticated access to CyVerse Discover
 ## Requirements
 
 - Go 1.25+
-- iRODS server access
 - Keycloak server for authentication
-- apps and app-exposer services
+- terrain service (the DE API gateway; it talks to apps, app-exposer, and the data store)
 
 ### Development Requirements
 
@@ -47,20 +46,12 @@ Formation is configured via a JSON configuration file. Copy `config.example.json
 cp config.example.json config.json
 ```
 
-The config file path defaults to `config.json` in the working directory and can be overridden with the `CONFIG_FILE` environment variable. Every setting can also be overridden by an environment variable (e.g. `IRODS_HOST`, `KEYCLOAK_SERVER_URL`, `APPS_BASE_URL`); environment variables take precedence over the config file.
+The config file path defaults to `config.json` in the working directory and can be overridden with the `CONFIG_FILE` environment variable. Every setting can also be overridden by an environment variable (e.g. `KEYCLOAK_SERVER_URL`, `TERRAIN_BASE_URL`, `OUTPUT_ZONE`); environment variables take precedence over the config file.
 
 ### Configuration File Structure
 
 ```json
 {
-  "irods": {
-    "host": "irods.example.com",
-    "port": "1247",
-    "user": "rods",
-    "password": "changeme",
-    "zone": "iplant",
-    "cache_ttl": 0
-  },
   "keycloak": {
     "server_url": "https://keycloak.example.com",
     "realm": "cyverse",
@@ -71,11 +62,10 @@ The config file path defaults to `config.json` in the working directory and can 
     "ssl_verify": true
   },
   "services": {
-    "apps_base_url": "http://apps:8080",
-    "app_exposer_base_url": "http://app-exposer:8080",
-    "permissions_base_url": "http://permissions:8080"
+    "terrain_base_url": "http://terrain"
   },
   "application": {
+    "output_zone": "iplant",
     "user_suffix": "@iplantcollaborative.org",
     "vice_domain": ".cyverse.run",
     "path_prefix": "/formation",
@@ -96,14 +86,6 @@ The config file path defaults to `config.json` in the working directory and can 
 
 ### Configuration Sections
 
-**irods**: iRODS server connection settings
-- `host`: iRODS server hostname
-- `port`: iRODS server port
-- `user`: iRODS username for service account
-- `password`: iRODS password
-- `zone`: iRODS zone name
-- `cache_ttl`: iRODS client metadata cache lifetime in seconds (default: 0, caching disabled). Leave disabled when running more than one replica — a cached (or cached-negative) entry on one replica hides writes made through another until it expires (env: `IRODS_CACHE_TTL`)
-
 **keycloak**: Keycloak authentication settings
 - `server_url`: Keycloak server URL
 - `realm`: Keycloak realm name
@@ -114,11 +96,10 @@ The config file path defaults to `config.json` in the working directory and can 
 - `ssl_verify`: Enable SSL verification (default: true)
 
 **services**: Backend service URLs
-- `apps_base_url`: Base URL of apps service
-- `app_exposer_base_url`: Base URL of app-exposer service
-- `permissions_base_url`: Base URL of permissions service (parsed for compatibility; unused)
+- `terrain_base_url`: Base URL of the terrain API gateway (default: `http://terrain`, env: `TERRAIN_BASE_URL`)
 
 **application**: Application behavior settings
+- `output_zone`: iRODS zone used when generating analysis output directories (env: `OUTPUT_ZONE`; the legacy `irods.zone` JSON key still works as a fallback)
 - `user_suffix`: Username suffix to strip from integrator usernames
 - `vice_domain`: Domain suffix for VICE applications
 - `path_prefix`: URL path prefix stripped from incoming requests when present (the gateway forwards paths like `/formation/apps` unrewritten); all routes also serve at `/`
@@ -130,7 +111,7 @@ The config file path defaults to `config.json` in the working directory and can 
 - `vice_url_check_retries`: Number of retries for VICE URL checks
 - `vice_url_check_cache_ttl`: Cache TTL for VICE URL check results in seconds
 - `service_accounts_only`: When true, disables regular user authentication and only accepts service account authentication (useful for testing)
-- `service_account_usernames`: Map of service account role names to usernames used when calling backend services
+- `service_account_usernames`: Map of service account role names to usernames; service-account requests are exchanged (RFC 8693 token exchange) for an impersonation token for the mapped user before calling terrain
 
 ## Usage
 
@@ -250,12 +231,19 @@ go test -run TestLaunch ./internal/handlers/
 
 ## History
 
-Formation was originally implemented in Python with FastAPI and rewritten in Go as a drop-in replacement: the REST API, response shapes, and configuration are unchanged. Intentional behavior improvements over the Python version:
+Formation was originally implemented in Python with FastAPI and rewritten in Go as a drop-in replacement: the REST API and response shapes are unchanged. Intentional behavior improvements over the Python version:
 
 - `GET /data` streams file contents instead of buffering whole files in memory.
-- `PUT /data` with `replace_metadata=true` replaces only the AVU attributes being set, preserving unrelated AVUs (including system attributes such as `ipc_UUID`).
+- `PUT /data` with `replace_metadata=true` replaces only the AVU attributes being set, preserving unrelated AVUs.
 - `DELETE /data` dry runs report the same error a real delete would for non-empty directories without `recurse=true`.
 - `GET /apps` uses real upstream pagination, so results are no longer truncated at 1000 apps when filtering.
+
+Formation was later retargeted from calling the apps/app-exposer services and iRODS directly to fronting the terrain API gateway, forwarding each caller's bearer token so the DE services enforce authorization (formation no longer holds rodsadmin credentials or calls unauthenticated admin endpoints). Behavior consequences:
+
+- The launch request body's `email` field is stripped instead of forwarded; the notification email always comes from the token's claims.
+- Metadata reads no longer include system AVUs (attributes starting with `ipc`), and writes to them are rejected — both were previously possible through the rodsadmin connection.
+- `DELETE /data` moves items to the DE trash instead of permanently removing them.
+- Service-account requests are exchanged for an impersonation token for the mapped username, so Keycloak must allow token exchange for formation's client and the mapped users must exist in the realm.
 
 Small mechanical differences from FastAPI: malformed query parameters return `400` with a `{"detail": ...}` body instead of pydantic's `422` validation arrays, an invalid date filter returns `400` instead of an unhandled `500`, and `GET /apps/analyses` (without the trailing slash) is served directly instead of being redirected. `GET /` serves an HTML landing page (MCP client setup instructions plus a Swagger UI link) instead of the JSON string `"Hello from formation."`; health checks should use `/` rather than `/docs` and rely on the status code, not the body.
 

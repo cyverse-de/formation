@@ -43,7 +43,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 **Service Account Username Mapping:**
 
-Service accounts use a configurable username when making requests to backend services like the apps service. This allows you to control what username is used for authorization checks in downstream services:
+Service accounts act as a configurable username: formation exchanges the service-account token (RFC 8693 token exchange against Keycloak) for an impersonation token issued to the mapped username, and that token is forwarded to terrain. This controls which DE user the request acts as:
 
 ```bash
 # Configure username mapping in config.json
@@ -62,7 +62,7 @@ export SERVICE_ACCOUNT_USERNAMES='{"app-runner": "de-service-account"}'
 **Mapping Behavior:**
 - If `"app-runner"` has a mapping: Uses the mapped username (e.g., `"de-service-account"`)
 - If no mapping exists: Uses the role name itself (e.g., `"app-runner"`)
-- The mapped/fallback username is then sanitized and used in all calls to backend services
+- The mapped/fallback username is sanitized, then impersonated via Keycloak token exchange; the sanitized user must exist in the realm and formation's client must be allowed to impersonate
 
 **Username Sanitization:**
 
@@ -83,8 +83,9 @@ Service account usernames are automatically sanitized before being sent to backe
 
 This sanitization affects how usernames appear in downstream services, particularly for whitelist-based access control:
 
-1. **Apps Service**: Receives the sanitized username via the `user` query parameter
-2. **App-Exposer**: Checks the sanitized username against the resource tracking bypass whitelist
+1. **Keycloak**: The sanitized username must exist as a realm user for the token exchange to succeed
+2. **Apps Service**: Sees the sanitized username (terrain extracts it from the impersonation token)
+3. **App-Exposer**: Checks the sanitized username against the resource tracking bypass whitelist
 
 **Example - App-Exposer Whitelist Configuration:**
 
@@ -111,8 +112,8 @@ resource_tracking:
 ```
 Formation config: "de-service-account"
     ↓ (sanitization)
-Sent to apps/app-exposer: "deserviceaccount"
-    ↓ (whitelist check)
+Impersonated Keycloak user: "deserviceaccount"
+    ↓ (token forwarded through terrain to apps/app-exposer)
 App-exposer whitelist: "deserviceaccount" (must match sanitized form)
 ```
 

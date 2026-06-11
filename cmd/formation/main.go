@@ -23,7 +23,6 @@ import (
 	"github.com/cyverse-de/formation/internal/auth"
 	"github.com/cyverse-de/formation/internal/clients"
 	"github.com/cyverse-de/formation/internal/config"
-	"github.com/cyverse-de/formation/internal/datastore"
 	"github.com/cyverse-de/formation/internal/handlers"
 	mcpserver "github.com/cyverse-de/formation/internal/mcp"
 	"github.com/cyverse-de/formation/internal/vice"
@@ -66,11 +65,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	e, cleanup, err := buildServer(cfg)
+	e, err := buildServer(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer cleanup()
 
 	go func() {
 		if err := e.Start(fmt.Sprintf(":%d", *listenPort)); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -90,9 +88,7 @@ func main() {
 }
 
 // buildServer wires up the Echo instance and routes; split from main for tests.
-// The returned cleanup function releases the iRODS connection pool and must be
-// called when the server shuts down.
-func buildServer(cfg *config.Config) (*echo.Echo, func(), error) {
+func buildServer(cfg *config.Config) (*echo.Echo, error) {
 	e := echo.New()
 	e.HideBanner = true
 	e.HTTPErrorHandler = apierror.HTTPErrorHandler
@@ -108,29 +104,22 @@ func buildServer(cfg *config.Config) (*echo.Echo, func(), error) {
 		cfg.KeycloakClientID, cfg.KeycloakClientSecret, cfg.KeycloakSSLVerify,
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	verifier := auth.NewVerifier(cfg.KeycloakServerURL, cfg.KeycloakRealm, cfg.KeycloakSSLVerify)
 	requireUser := auth.RequireUser(verifier)
 	requireUserOrSA := auth.RequireUserOrServiceAccount(verifier, cfg.ServiceAccountsOnly)
 
-	appsClient, err := clients.NewApps(cfg.AppsBaseURL)
+	terrainClient, err := clients.NewTerrain(cfg.TerrainBaseURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	exposerClient, err := clients.NewAppExposer(cfg.AppExposerBaseURL)
-	if err != nil {
-		return nil, nil, err
-	}
+	callers := auth.NewCallerResolver(auth.NewImpersonator(keycloak), cfg.ServiceAccountUsernames)
 	urlChecker := vice.NewURLChecker(cfg.ViceURLCheckTimeout, cfg.ViceURLCheckRetries, cfg.ViceURLCheckCacheTTL)
-	subdomains := vice.NewSubdomainResolver(exposerClient)
-	apps := handlers.NewApps(appsClient, exposerClient, urlChecker, subdomains, cfg)
+	subdomains := vice.NewSubdomainResolver(terrainClient)
+	apps := handlers.NewApps(terrainClient, urlChecker, subdomains, callers, cfg)
 
-	store, err := datastore.NewIRODS(cfg.IRODSHost, cfg.IRODSPort, cfg.IRODSUser, cfg.IRODSPassword, cfg.IRODSZone, cfg.IRODSCacheTTL)
-	if err != nil {
-		return nil, nil, err
-	}
-	data := handlers.NewData(store)
+	data := handlers.NewData(terrainClient)
 
 	// The spec's basePath makes Swagger UI's try-it-out requests include the
 	// gateway prefix; direct (unprefixed) access works via StripPathPrefix.
@@ -142,7 +131,7 @@ func buildServer(cfg *config.Config) (*echo.Echo, func(), error) {
 
 	landing, err := handlers.Landing(cfg, mcpserver.ToolNames)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	e.GET("/", landing)
 	e.POST("/login", handlers.Login(keycloak))
@@ -174,5 +163,5 @@ func buildServer(cfg *config.Config) (*echo.Echo, func(), error) {
 		log.Infof("MCP server mounted at /mcp (resource %s/mcp, shared client %s)", cfg.PublicBaseURL, cfg.MCPClientID)
 	}
 
-	return e, store.Release, nil
+	return e, nil
 }

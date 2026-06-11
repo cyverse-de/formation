@@ -178,24 +178,27 @@ func TestURLCheckerRetriesThenSucceeds(t *testing.T) {
 	}
 }
 
-func exposerStub(t *testing.T, handler http.HandlerFunc) *clients.AppExposer {
+func terrainStub(t *testing.T, handler http.HandlerFunc) *clients.Terrain {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	exposer, err := clients.NewAppExposer(server.URL)
+	terrain, err := clients.NewTerrain(server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return exposer
+	return terrain
 }
 
 func TestSubdomainResolver(t *testing.T) {
 	t.Run("resolves after async-data 404 retries", func(t *testing.T) {
 		var asyncCalls atomic.Int32
-		exposer := exposerStub(t, func(w http.ResponseWriter, r *http.Request) {
+		terrain := terrainStub(t, func(w http.ResponseWriter, r *http.Request) {
+			if got := r.Header.Get("Authorization"); got != "Bearer tok-1" {
+				t.Errorf("Authorization = %q, want the caller's token", got)
+			}
 			switch r.URL.Path {
-			case "/vice/admin/analyses/an-1/external-id":
-				_ = json.NewEncoder(w).Encode(map[string]any{"external_id": "ext-1"})
+			case "/vice/analyses/an-1/external-id":
+				_ = json.NewEncoder(w).Encode(map[string]any{"externalID": "ext-1"})
 			case "/vice/async-data":
 				if asyncCalls.Add(1) < 3 {
 					w.WriteHeader(404)
@@ -207,34 +210,34 @@ func TestSubdomainResolver(t *testing.T) {
 			}
 		})
 
-		resolver := NewSubdomainResolverWithRetries(exposer, 5, 10*time.Millisecond)
-		if got := resolver.Resolve(context.Background(), "an-1"); got != "a1b2c3" {
+		resolver := NewSubdomainResolverWithRetries(terrain, 5, 10*time.Millisecond)
+		if got := resolver.Resolve(context.Background(), "tok-1", "an-1"); got != "a1b2c3" {
 			t.Errorf("Resolve() = %q, want a1b2c3", got)
 		}
 	})
 
-	t.Run("missing external_id returns empty", func(t *testing.T) {
-		exposer := exposerStub(t, func(w http.ResponseWriter, r *http.Request) {
+	t.Run("missing externalID returns empty", func(t *testing.T) {
+		terrain := terrainStub(t, func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{})
 		})
-		resolver := NewSubdomainResolverWithRetries(exposer, 2, time.Millisecond)
-		if got := resolver.Resolve(context.Background(), "an-1"); got != "" {
+		resolver := NewSubdomainResolverWithRetries(terrain, 2, time.Millisecond)
+		if got := resolver.Resolve(context.Background(), "tok-1", "an-1"); got != "" {
 			t.Errorf("Resolve() = %q, want empty", got)
 		}
 	})
 
 	t.Run("non-404 async-data error gives up", func(t *testing.T) {
 		var asyncCalls atomic.Int32
-		exposer := exposerStub(t, func(w http.ResponseWriter, r *http.Request) {
+		terrain := terrainStub(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/vice/async-data" {
 				asyncCalls.Add(1)
 				w.WriteHeader(500)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"external_id": "ext-1"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"externalID": "ext-1"})
 		})
-		resolver := NewSubdomainResolverWithRetries(exposer, 5, time.Millisecond)
-		if got := resolver.Resolve(context.Background(), "an-1"); got != "" {
+		resolver := NewSubdomainResolverWithRetries(terrain, 5, time.Millisecond)
+		if got := resolver.Resolve(context.Background(), "tok-1", "an-1"); got != "" {
 			t.Errorf("Resolve() = %q, want empty", got)
 		}
 		if asyncCalls.Load() != 1 {
@@ -244,16 +247,16 @@ func TestSubdomainResolver(t *testing.T) {
 
 	t.Run("404s exhaust retries", func(t *testing.T) {
 		var asyncCalls atomic.Int32
-		exposer := exposerStub(t, func(w http.ResponseWriter, r *http.Request) {
+		terrain := terrainStub(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/vice/async-data" {
 				asyncCalls.Add(1)
 				w.WriteHeader(404)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"external_id": "ext-1"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"externalID": "ext-1"})
 		})
-		resolver := NewSubdomainResolverWithRetries(exposer, 3, time.Millisecond)
-		if got := resolver.Resolve(context.Background(), "an-1"); got != "" {
+		resolver := NewSubdomainResolverWithRetries(terrain, 3, time.Millisecond)
+		if got := resolver.Resolve(context.Background(), "tok-1", "an-1"); got != "" {
 			t.Errorf("Resolve() = %q, want empty", got)
 		}
 		if asyncCalls.Load() != 3 {
