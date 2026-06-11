@@ -29,8 +29,9 @@ type DataEntry struct {
 }
 
 // Data is an in-memory fake of terrain's filesystem and fileio endpoints,
-// mimicking the data-info behaviors formation depends on: stat with 404/403
-// error codes, paged listings, binary download/upload/overwrite, directory
+// mimicking the data-info behaviors formation depends on (as observed against
+// QA): ERR_DOES_NOT_EXIST as a 500, stat omitting unreadable paths from a 200
+// response, paged listings, binary download/upload/overwrite, directory
 // creation, full-listing metadata set, and recursive (trash) deletion.
 type Data struct {
 	Files map[string][]byte
@@ -118,12 +119,11 @@ func (d *Data) statRecord(p string) map[string]any {
 }
 
 // check returns the error status/body for a missing or unreadable path.
+// Like real terrain (observed in QA), ERR_DOES_NOT_EXIST arrives as a 500,
+// and iRODS hides unreadable paths so they also read as nonexistent.
 func (d *Data) check(p string) (int, map[string]any) {
-	if !d.exists(p) {
-		return http.StatusNotFound, errorBody("ERR_DOES_NOT_EXIST")
-	}
-	if d.permission(p) == "none" {
-		return http.StatusForbidden, errorBody("ERR_NOT_READABLE")
+	if !d.exists(p) || d.permission(p) == "none" {
+		return http.StatusInternalServerError, errorBody("ERR_DOES_NOT_EXIST")
 	}
 	return 0, nil
 }
@@ -162,8 +162,14 @@ func (d *Data) stat(r *http.Request) (int, any) {
 
 	paths := make(map[string]any, len(body.Paths))
 	for _, p := range body.Paths {
-		if status, errBody := d.check(p); status != 0 {
-			return status, errBody
+		if !d.exists(p) {
+			return http.StatusInternalServerError, errorBody("ERR_DOES_NOT_EXIST")
+		}
+		// Stat is the one endpoint that can see unreadable paths: data-info
+		// validates existence, then silently omits entries the caller cannot
+		// read, so the response is a 200 with the path missing.
+		if d.permission(p) == "none" {
+			continue
 		}
 		paths[p] = d.statRecord(p)
 	}
@@ -229,7 +235,7 @@ func (d *Data) upload(r *http.Request) (int, any) {
 		return status, errBody
 	}
 	if !d.writable(dest) {
-		return http.StatusForbidden, errorBody("ERR_NOT_WRITEABLE")
+		return http.StatusInternalServerError, errorBody("ERR_NOT_WRITEABLE")
 	}
 
 	content, filename, ok := filePart(r)
@@ -253,7 +259,7 @@ func (d *Data) overwrite(r *http.Request) (int, any) {
 		return status, errBody
 	}
 	if !d.writable(dest) {
-		return http.StatusForbidden, errorBody("ERR_NOT_WRITEABLE")
+		return http.StatusInternalServerError, errorBody("ERR_NOT_WRITEABLE")
 	}
 	if d.isDir(dest) {
 		return http.StatusBadRequest, errorBody("ERR_NOT_A_FILE")
@@ -279,7 +285,7 @@ func (d *Data) createDirectory(r *http.Request) (int, any) {
 		return status, errBody
 	}
 	if !d.writable(parent) {
-		return http.StatusForbidden, errorBody("ERR_NOT_WRITEABLE")
+		return http.StatusInternalServerError, errorBody("ERR_NOT_WRITEABLE")
 	}
 	if d.exists(body.Path) {
 		return http.StatusConflict, errorBody("ERR_EXISTS")
@@ -302,7 +308,7 @@ func (d *Data) delete(r *http.Request) (int, any) {
 			return status, errBody
 		}
 		if !d.writable(p) {
-			return http.StatusForbidden, errorBody("ERR_NOT_WRITEABLE")
+			return http.StatusInternalServerError, errorBody("ERR_NOT_WRITEABLE")
 		}
 		delete(d.Files, p)
 		delete(d.Dirs, p)
@@ -331,7 +337,7 @@ func (d *Data) metadata(r *http.Request) (int, any) {
 
 	case http.MethodPost:
 		if !d.writable(p) {
-			return http.StatusForbidden, errorBody("ERR_NOT_WRITEABLE")
+			return http.StatusInternalServerError, errorBody("ERR_NOT_WRITEABLE")
 		}
 		var body struct {
 			IRODSAVUs []DataAVU `json:"irods-avus"`

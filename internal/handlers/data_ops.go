@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -53,15 +54,45 @@ func upstreamStatus(err error) int {
 	return 0
 }
 
+// upstreamErrorCode returns the error_code from an UpstreamError's JSON body,
+// or "". Terrain surfaces data-info error codes with non-obvious HTTP statuses
+// (ERR_DOES_NOT_EXIST arrives as a 500), so the code is the reliable signal.
+func upstreamErrorCode(err error) string {
+	var upstream *apierror.UpstreamError
+	if !errors.As(err, &upstream) {
+		return ""
+	}
+	var body struct {
+		ErrorCode string `json:"error_code"`
+	}
+	_ = json.Unmarshal([]byte(upstream.Body), &body)
+	return body.ErrorCode
+}
+
+// isNotFound reports whether the upstream error means the path does not exist.
+func isNotFound(err error) bool {
+	return upstreamStatus(err) == http.StatusNotFound || upstreamErrorCode(err) == "ERR_DOES_NOT_EXIST"
+}
+
+// isPermissionDenied reports whether the upstream error means the caller
+// lacks permission on the path.
+func isPermissionDenied(err error) bool {
+	switch upstreamErrorCode(err) {
+	case "ERR_NOT_READABLE", "ERR_NOT_WRITEABLE", "ERR_NOT_AUTHORIZED":
+		return true
+	}
+	return upstreamStatus(err) == http.StatusForbidden
+}
+
 // mapDataError converts terrain's data errors into the Python-compatible
-// formation responses: 404 becomes "<what> '<path>' not found" and 403
-// becomes "Access denied".
+// formation responses: missing paths become "<what> '<path>' not found" and
+// permission failures become "Access denied".
 func mapDataError(err error, irodsPath, what string) error {
-	switch upstreamStatus(err) {
-	case http.StatusNotFound:
-		return apierror.NewNotFound(what, irodsPath)
-	case http.StatusForbidden:
+	switch {
+	case isPermissionDenied(err):
 		return apierror.NewPermissionDenied("")
+	case isNotFound(err):
+		return apierror.NewNotFound(what, irodsPath)
 	}
 	return err
 }
@@ -227,11 +258,11 @@ func (h *Data) UploadFile(ctx context.Context, token, irodsPath string, content 
 		}
 		return putResult(irodsPath, TypeDataObject, false), nil
 
-	case upstreamStatus(err) == http.StatusNotFound:
+	case isNotFound(err):
 		parent := path.Dir(irodsPath)
 		parentStat, err := h.terrain.Stat(ctx, token, parent)
 		if err != nil {
-			if upstreamStatus(err) == http.StatusNotFound {
+			if isNotFound(err) {
 				return nil, apierror.NewNotFound("Parent directory", parent)
 			}
 			return nil, mapDataError(err, parent, "Parent directory")
@@ -284,14 +315,14 @@ func (h *Data) UpdateMetadata(ctx context.Context, token, irodsPath string, meta
 func (h *Data) MakeDirectory(ctx context.Context, token, irodsPath string, metadata []AVU, replace bool) (map[string]any, error) {
 	if _, err := h.terrain.Stat(ctx, token, irodsPath); err == nil {
 		return h.UpdateMetadata(ctx, token, irodsPath, metadata, replace)
-	} else if upstreamStatus(err) != http.StatusNotFound {
+	} else if !isNotFound(err) {
 		return nil, mapDataError(err, irodsPath, "Path")
 	}
 
 	parent := path.Dir(irodsPath)
 	parentStat, err := h.terrain.Stat(ctx, token, parent)
 	if err != nil {
-		if upstreamStatus(err) == http.StatusNotFound {
+		if isNotFound(err) {
 			return nil, apierror.NewNotFound("Parent directory", parent)
 		}
 		return nil, mapDataError(err, parent, "Parent directory")

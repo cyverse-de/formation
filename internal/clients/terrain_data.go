@@ -42,8 +42,9 @@ func (s *StatInfo) Children() int {
 	return s.FileCount + s.DirCount
 }
 
-// Stat returns terrain's stat record for one path. Terrain answers 404 for
-// missing paths and 403 for paths the caller cannot read.
+// Stat returns terrain's stat record for one path. Missing paths error with
+// ERR_DOES_NOT_EXIST; paths the caller cannot read come back as a successful
+// response with the path omitted, which is surfaced as a permission error.
 func (t *Terrain) Stat(ctx context.Context, token, path string) (*StatInfo, error) {
 	data, err := doJSON(ctx, t.client, http.MethodPost,
 		endpoint(t.base, nil, "secured", "filesystem", "stat"), token,
@@ -60,7 +61,9 @@ func (t *Terrain) Stat(ctx context.Context, token, path string) (*StatInfo, erro
 	}
 	info := response.Paths[path]
 	if info == nil {
-		return nil, &apierror.UpstreamError{Status: http.StatusNotFound}
+		// The path exists (missing paths error instead) but data-info filtered
+		// it out of the listing because the caller cannot read it.
+		return nil, &apierror.UpstreamError{Status: http.StatusForbidden, Body: `{"error_code":"ERR_NOT_READABLE"}`}
 	}
 	return info, nil
 }

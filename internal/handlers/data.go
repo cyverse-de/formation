@@ -218,7 +218,7 @@ func (h *Data) Put(c echo.Context) error {
 	case statErr == nil:
 		// Metadata-only update on an existing file or collection.
 		result, err = h.UpdateMetadata(ctx, caller.Token, irodsPath, metadata, replaceMetadata)
-	case upstreamStatus(statErr) == http.StatusNotFound:
+	case isNotFound(statErr):
 		if c.QueryParam("resource_type") != "directory" {
 			return apierror.NewBadRequest("Cannot determine operation: provide file content or type=directory parameter")
 		}
