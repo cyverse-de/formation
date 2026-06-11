@@ -2,12 +2,27 @@ package auth
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 )
+
+// newHTTPClient returns a client with an explicit timeout; sslVerify=false
+// disables certificate checks like the Python verify=False option.
+func newHTTPClient(sslVerify bool) *http.Client {
+	client := &http.Client{Timeout: 30 * time.Second}
+	if !sslVerify {
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // #nosec G402 -- mirrors keycloak.ssl_verify config
+		}
+	}
+	return client
+}
 
 // Verifier validates Keycloak bearer tokens: RS256 signature against the
 // realm JWKS, issuer, and expiry. The audience check is skipped to match the

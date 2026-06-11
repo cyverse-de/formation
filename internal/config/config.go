@@ -31,11 +31,9 @@ const (
 
 // Config holds all formation settings.
 type Config struct {
-	KeycloakServerURL    string
-	KeycloakRealm        string
-	KeycloakClientID     string
-	KeycloakClientSecret string
-	KeycloakSSLVerify    bool
+	KeycloakServerURL string
+	KeycloakRealm     string
+	KeycloakSSLVerify bool
 
 	TerrainBaseURL string
 
@@ -50,14 +48,10 @@ type Config struct {
 	// OutputZone is the iRODS zone where analysis outputs land.
 	OutputZone string
 
-	ServiceAccountsOnly     bool
-	ServiceAccountUsernames map[string]string
-
 	// MCP server settings. PublicBaseURL is formation's externally visible
 	// base URL (e.g. https://de.cyverse.org/formation), used to build the
 	// OAuth resource identifier and discovery metadata. MCPClientID is the
 	// shared public Keycloak client returned by the registration shim.
-	MCPEnabled         bool
 	MCPClientID        string
 	PublicBaseURL      string
 	MCPScopes          string
@@ -88,12 +82,6 @@ func Load() (*Config, error) {
 		cfg.KeycloakServerURL += "/"
 	}
 	if cfg.KeycloakRealm, err = required("KEYCLOAK_REALM", keycloak, "realm"); err != nil {
-		return nil, err
-	}
-	if cfg.KeycloakClientID, err = required("KEYCLOAK_CLIENT_ID", keycloak, "client_id"); err != nil {
-		return nil, err
-	}
-	if cfg.KeycloakClientSecret, err = required("KEYCLOAK_CLIENT_SECRET", keycloak, "client_secret"); err != nil {
 		return nil, err
 	}
 	cfg.KeycloakSSLVerify = boolValue("KEYCLOAK_SSL_VERIFY", keycloak, "ssl_verify", true)
@@ -132,27 +120,18 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("configuration value OUTPUT_ZONE is not set (not in environment or JSON config)")
 	}
 
-	cfg.ServiceAccountsOnly = boolValue("SERVICE_ACCOUNTS_ONLY", app, "service_accounts_only", false)
-
-	if cfg.ServiceAccountUsernames, err = usernameMap(app); err != nil {
+	if cfg.MCPClientID, err = required("MCP_CLIENT_ID", keycloak, "mcp_client_id"); err != nil {
 		return nil, err
 	}
-
-	cfg.MCPEnabled = boolValue("MCP_ENABLED", app, "mcp_enabled", true)
-	if cfg.MCPEnabled {
-		if cfg.MCPClientID, err = required("MCP_CLIENT_ID", keycloak, "mcp_client_id"); err != nil {
-			return nil, err
-		}
-		if cfg.PublicBaseURL, err = required("PUBLIC_BASE_URL", app, "public_base_url"); err != nil {
-			return nil, err
-		}
-		cfg.PublicBaseURL = strings.TrimSuffix(cfg.PublicBaseURL, "/")
-		// This URL is embedded in every OAuth discovery document; a malformed
-		// value (e.g. "https:host" without "//") breaks MCP clients with
-		// errors that point nowhere near the cause, so fail fast instead.
-		if err := validatePublicBaseURL(cfg.PublicBaseURL); err != nil {
-			return nil, err
-		}
+	if cfg.PublicBaseURL, err = required("PUBLIC_BASE_URL", app, "public_base_url"); err != nil {
+		return nil, err
+	}
+	cfg.PublicBaseURL = strings.TrimSuffix(cfg.PublicBaseURL, "/")
+	// This URL is embedded in every OAuth discovery document; a malformed
+	// value (e.g. "https:host" without "//") breaks MCP clients with
+	// errors that point nowhere near the cause, so fail fast instead.
+	if err := validatePublicBaseURL(cfg.PublicBaseURL); err != nil {
+		return nil, err
 	}
 	cfg.MCPScopes = optional("MCP_SCOPES", keycloak, "mcp_scopes", DefaultMCPScopes)
 	if cfg.MCPLaunchMaxWait, err = duration("MCP_LAUNCH_MAX_WAIT", app, "mcp_launch_max_wait", DefaultMCPLaunchMaxWait); err != nil {
@@ -300,20 +279,4 @@ func integer(envVar string, sec map[string]any, key string, fallback int) (int, 
 		return 0, fmt.Errorf("invalid value for %s: %q is not an integer", envVar, s)
 	}
 	return n, nil
-}
-
-func usernameMap(app map[string]any) (map[string]string, error) {
-	usernames := map[string]string{}
-	if v, ok := os.LookupEnv("SERVICE_ACCOUNT_USERNAMES"); ok {
-		if err := json.Unmarshal([]byte(v), &usernames); err != nil {
-			return nil, fmt.Errorf("invalid JSON in SERVICE_ACCOUNT_USERNAMES: %s: %w", v, err)
-		}
-		return usernames, nil
-	}
-	if m, ok := app["service_account_usernames"].(map[string]any); ok {
-		for role, name := range m {
-			usernames[role] = stringify(name)
-		}
-	}
-	return usernames, nil
 }

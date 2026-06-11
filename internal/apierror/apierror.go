@@ -1,6 +1,5 @@
-// Package apierror defines formation's typed errors and the Echo error handler
-// that renders them with the same JSON shapes as the original FastAPI service,
-// which existing clients may parse.
+// Package apierror defines formation's typed errors and the Echo error
+// handler that renders them as {"detail": ...} JSON bodies.
 package apierror
 
 import (

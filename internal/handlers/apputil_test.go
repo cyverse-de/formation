@@ -1,30 +1,10 @@
 package handlers
 
 import (
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/cyverse-de/formation/internal/apierror"
 )
-
-func TestNormalizeJobType(t *testing.T) {
-	tests := []struct{ in, want string }{
-		{"vice", "Interactive"},
-		{"VICE", "Interactive"},
-		{"interactive", "Interactive"},
-		{"de", "DE"},
-		{"DE", "DE"},
-		{"osg", "OSG"},
-		{"tapis", "Tapis"},
-		{"FutureType", "FutureType"},
-	}
-	for _, tt := range tests {
-		if got := normalizeJobType(tt.in); got != tt.want {
-			t.Errorf("normalizeJobType(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
 
 func TestValidateUUID(t *testing.T) {
 	if _, err := validateUUID("0123abcd-0000-4000-8000-00000000beef", "app_id"); err != nil {
@@ -74,81 +54,6 @@ func TestIsPlaceholder(t *testing.T) {
 				t.Errorf("isPlaceholder(%v) = %v, want %v", tt.value, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestParseDateFilter(t *testing.T) {
-	utc := func(s string) time.Time {
-		parsed, err := time.Parse(time.RFC3339, s)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return parsed.UTC()
-	}
-
-	tests := []struct {
-		name     string
-		expr     string
-		wantOp   string
-		wantDate time.Time
-		wantErr  string
-	}{
-		{name: "date only", expr: ">2025-09-29", wantOp: ">", wantDate: utc("2025-09-29T00:00:00Z")},
-		{name: "datetime", expr: "<=2024-12-31T23:59:59", wantOp: "<=", wantDate: utc("2024-12-31T23:59:59Z")},
-		{name: "utc zulu", expr: ">=2025-01-01T00:00:00Z", wantOp: ">=", wantDate: utc("2025-01-01T00:00:00Z")},
-		{name: "tz offset converted to utc", expr: ">2025-09-29T14:30:00+05:00", wantOp: ">", wantDate: utc("2025-09-29T09:30:00Z")},
-		{name: "negative offset", expr: "<2025-09-29T14:30:00-08:00", wantOp: "<", wantDate: utc("2025-09-29T22:30:00Z")},
-		{name: "microseconds", expr: ">2025-09-29T14:30:00.123456", wantOp: ">", wantDate: utc("2025-09-29T14:30:00Z").Add(123456 * time.Microsecond)},
-		{name: "double equals normalized", expr: "==2025-01-01", wantOp: "=", wantDate: utc("2025-01-01T00:00:00Z")},
-		{name: "whitespace after operator", expr: "> 2025-09-29", wantOp: ">", wantDate: utc("2025-09-29T00:00:00Z")},
-		{name: "missing operator", expr: "2025-09-29", wantErr: "Invalid date filter format: '2025-09-29'"},
-		{name: "garbage", expr: "invalid", wantErr: "Invalid date filter format: 'invalid'. Expected format: <operator><date> (e.g., '>2025-09-29', '<=2024-12-31T23:59:59')"},
-		{name: "bad date", expr: ">not-a-date", wantErr: "Invalid date format: 'not-a-date'"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			filter, err := parseDateFilter(tt.expr)
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if filter.operator != tt.wantOp {
-				t.Errorf("operator = %q, want %q", filter.operator, tt.wantOp)
-			}
-			if !filter.date.Equal(tt.wantDate) {
-				t.Errorf("date = %v, want %v", filter.date, tt.wantDate)
-			}
-		})
-	}
-}
-
-func TestDateFilterMatches(t *testing.T) {
-	base := time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC)
-	earlier := base.Add(-time.Hour)
-	later := base.Add(time.Hour)
-
-	tests := []struct {
-		op      string
-		appDate time.Time
-		want    bool
-	}{
-		{">", later, true}, {">", base, false}, {">", earlier, false},
-		{"<", earlier, true}, {"<", base, false}, {"<", later, false},
-		{">=", base, true}, {">=", later, true}, {">=", earlier, false},
-		{"<=", base, true}, {"<=", earlier, true}, {"<=", later, false},
-		{"=", base, true}, {"=", later, false},
-	}
-	for _, tt := range tests {
-		filter := &dateFilter{operator: tt.op, date: base}
-		if got := filter.matches(tt.appDate); got != tt.want {
-			t.Errorf("(%v %s %v) = %v, want %v", tt.appDate, tt.op, base, got, tt.want)
-		}
 	}
 }
 

@@ -21,29 +21,22 @@ func TestLanding(t *testing.T) {
 		wantAbsent []string
 	}{
 		{
-			name: "mcp enabled with public base url",
-			cfg:  config.Config{MCPEnabled: true, PublicBaseURL: "https://de.example.org/formation"},
+			name: "public base url",
+			cfg:  config.Config{PublicBaseURL: "https://de.example.org/formation"},
 			wantBody: []string{
 				"https://de.example.org/formation/mcp",
-				"https://de.example.org/formation/docs",
 				"claude mcp add --transport http formation",
 				`"serverUrl"`,
 				"mcp_config.json",
 				"list_apps",
 				"delete_data",
 			},
+			wantAbsent: []string{"/docs", "REST API"},
 		},
 		{
-			name:       "mcp disabled with path prefix",
-			cfg:        config.Config{PathPrefix: "/formation"},
-			wantBody:   []string{`href="/formation/docs"`},
-			wantAbsent: []string{"MCP Server", "mcp_config.json", "list_apps"},
-		},
-		{
-			name:       "mcp disabled without prefix",
-			cfg:        config.Config{},
-			wantBody:   []string{`href="/docs"`},
-			wantAbsent: []string{"MCP Server"},
+			name:     "path prefix fallback",
+			cfg:      config.Config{PathPrefix: "/formation"},
+			wantBody: []string{"/formation/mcp"},
 		},
 	}
 

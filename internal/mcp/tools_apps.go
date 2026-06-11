@@ -94,7 +94,7 @@ func (s *server) registerAppsTools(srv *sdk.Server) {
 }
 
 func (s *server) listApps(ctx context.Context, req *sdk.CallToolRequest, in listAppsInput) (*sdk.CallToolResult, error) {
-	caller, err := s.appsCaller(ctx, req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (s *server) listApps(ctx context.Context, req *sdk.CallToolRequest, in list
 }
 
 func (s *server) launchAppAndWait(ctx context.Context, req *sdk.CallToolRequest, in launchAppInput) (*sdk.CallToolResult, error) {
-	caller, err := s.appsCaller(ctx, req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +214,7 @@ func notifyProgress(ctx context.Context, req *sdk.CallToolRequest, message strin
 }
 
 func (s *server) getAnalysisStatus(ctx context.Context, req *sdk.CallToolRequest, in analysisStatusInput) (*sdk.CallToolResult, error) {
-	caller, err := s.appsCaller(ctx, req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +226,7 @@ func (s *server) getAnalysisStatus(ctx context.Context, req *sdk.CallToolRequest
 }
 
 func (s *server) listRunningAnalyses(ctx context.Context, req *sdk.CallToolRequest, _ listRunningInput) (*sdk.CallToolResult, error) {
-	caller, err := s.appsCaller(ctx, req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +238,7 @@ func (s *server) listRunningAnalyses(ctx context.Context, req *sdk.CallToolReque
 }
 
 func (s *server) getAppParameters(ctx context.Context, req *sdk.CallToolRequest, in appParametersInput) (*sdk.CallToolResult, error) {
-	caller, err := s.appsCaller(ctx, req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +254,7 @@ func (s *server) getAppParameters(ctx context.Context, req *sdk.CallToolRequest,
 }
 
 func (s *server) stopAnalysis(ctx context.Context, req *sdk.CallToolRequest, in stopAnalysisInput) (*sdk.CallToolResult, error) {
-	caller, err := s.appsCaller(ctx, req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}

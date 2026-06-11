@@ -72,8 +72,7 @@ func (s *server) registerDataTools(srv *sdk.Server) {
 	}, wrapTool("delete_data", s.deleteData))
 }
 
-// irodsPath normalizes a tool-supplied path to have a leading slash, like
-// the REST routes do.
+// irodsPath normalizes a tool-supplied path to have a leading slash.
 func irodsPath(p string) string {
 	if !strings.HasPrefix(p, "/") {
 		return "/" + p
@@ -81,9 +80,9 @@ func irodsPath(p string) string {
 	return p
 }
 
-// avusFromMap converts tool metadata to AVUs the same way the REST API reads
-// X-Datastore-* headers: attribute names lowercased, values split into value
-// and units on the first comma, sorted by attribute.
+// avusFromMap converts tool metadata to AVUs the same way the former REST
+// API read X-Datastore-* headers: attribute names lowercased, values split
+// into value and units on the first comma, sorted by attribute.
 func avusFromMap(metadata map[string]string) []clients.MetadataAVU {
 	avus := make([]clients.MetadataAVU, 0, len(metadata))
 	for attribute, value := range metadata {
@@ -98,7 +97,7 @@ func avusFromMap(metadata map[string]string) []clients.MetadataAVU {
 }
 
 func (s *server) browseData(ctx context.Context, req *sdk.CallToolRequest, in browseDataInput) (*sdk.CallToolResult, error) {
-	caller, err := dataCaller(req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +109,7 @@ func (s *server) browseData(ctx context.Context, req *sdk.CallToolRequest, in br
 }
 
 func (s *server) createDirectory(ctx context.Context, req *sdk.CallToolRequest, in createDirectoryInput) (*sdk.CallToolResult, error) {
-	caller, err := dataCaller(req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +121,7 @@ func (s *server) createDirectory(ctx context.Context, req *sdk.CallToolRequest, 
 }
 
 func (s *server) uploadFile(ctx context.Context, req *sdk.CallToolRequest, in uploadFileInput) (*sdk.CallToolResult, error) {
-	caller, err := dataCaller(req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +138,7 @@ func (s *server) uploadFile(ctx context.Context, req *sdk.CallToolRequest, in up
 }
 
 func (s *server) setMetadata(ctx context.Context, req *sdk.CallToolRequest, in setMetadataInput) (*sdk.CallToolResult, error) {
-	caller, err := dataCaller(req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +155,7 @@ func (s *server) setMetadata(ctx context.Context, req *sdk.CallToolRequest, in s
 }
 
 func (s *server) deleteData(ctx context.Context, req *sdk.CallToolRequest, in deleteDataInput) (*sdk.CallToolResult, error) {
-	caller, err := dataCaller(req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}

@@ -19,7 +19,6 @@ func newMetadataEnv(t *testing.T) (*echo.Echo, *config.Config) {
 		KeycloakServerURL: "https://kc.example.org/auth/",
 		KeycloakRealm:     "de",
 		PathPrefix:        "/formation",
-		MCPEnabled:        true,
 		MCPClientID:       "formation-mcp",
 		PublicBaseURL:     "https://de.example.org/formation",
 		MCPScopes:         "openid profile email",

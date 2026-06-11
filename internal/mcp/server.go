@@ -1,6 +1,6 @@
 // Package mcp hosts formation's Model Context Protocol server at /mcp,
-// re-exposing the apps, analyses, and data operations as MCP tools behind
-// the same Keycloak bearer-token auth as the REST endpoints.
+// exposing the apps, analyses, and data operations as MCP tools behind
+// Keycloak bearer-token auth.
 package mcp
 
 import (
@@ -19,21 +19,18 @@ import (
 // a variable so tests can shorten it.
 var launchPollInterval = 5 * time.Second
 
-// Deps carries the shared handlers, identity resolver, and config the MCP
-// tools delegate to.
+// Deps carries the shared operations and config the MCP tools delegate to.
 type Deps struct {
-	Apps    *handlers.Apps
-	Data    *handlers.Data
-	Callers *auth.CallerResolver
-	Cfg     *config.Config
+	Apps *handlers.Apps
+	Data *handlers.Data
+	Cfg  *config.Config
 }
 
 // server holds the tool handlers' shared dependencies.
 type server struct {
-	apps    *handlers.Apps
-	data    *handlers.Data
-	callers *auth.CallerResolver
-	cfg     *config.Config
+	apps *handlers.Apps
+	data *handlers.Data
+	cfg  *config.Config
 }
 
 // ToolNames lists every tool NewServer registers, in registration order. The
@@ -48,7 +45,7 @@ var ToolNames = []string{
 
 // NewServer builds the MCP server with all formation tools registered.
 func NewServer(d Deps) *sdk.Server {
-	s := &server{apps: d.Apps, data: d.Data, callers: d.Callers, cfg: d.Cfg}
+	s := &server{apps: d.Apps, data: d.Data, cfg: d.Cfg}
 	srv := sdk.NewServer(&sdk.Implementation{
 		Name:    "formation",
 		Title:   "CyVerse Formation",

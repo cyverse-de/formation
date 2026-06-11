@@ -12,9 +12,20 @@ import (
 	"github.com/cyverse-de/formation/internal/clients"
 )
 
-// This file holds the echo-free bodies of the /data operations so the MCP
-// tools can call the same logic in-process. The Echo handlers wrap these and
-// must keep their response shapes byte-compatible with the Python API.
+// Data provides the data-store browse, upload, metadata, and delete
+// operations backed by terrain, exposed through the MCP tools.
+type Data struct {
+	terrain *clients.Terrain
+}
+
+// NewData wires the data operations with the terrain client.
+func NewData(terrainClient *clients.Terrain) *Data {
+	return &Data{terrain: terrainClient}
+}
+
+func putResult(irodsPath, resultType string, created bool) map[string]any {
+	return map[string]any{"path": irodsPath, "type": resultType, "created": created}
+}
 
 // Entry types reported in directory listings and delete results.
 const (
@@ -243,7 +254,7 @@ func (h *Data) Browse(ctx context.Context, token, irodsPath string, offset, limi
 		result.Content = content
 	}
 
-	// Metadata lookup errors are swallowed, like the REST metadata headers.
+	// Metadata lookup errors are swallowed so an outage doesn't break reads.
 	if includeMetadata {
 		if avus, err := h.pathMetadata(ctx, token, st.ID); err == nil {
 			result.Metadata = avus

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -62,33 +63,25 @@ func newEnv(t *testing.T, respond func(r *http.Request) (int, any)) *env {
 
 	kc := authtest.New(t, "de")
 	verifier := auth.NewVerifier(kc.ServerURL(), kc.Realm, true)
-	keycloak, err := auth.NewKeycloak(kc.ServerURL(), kc.Realm, "formation", "secret", true)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	cfg := &config.Config{
-		KeycloakServerURL:       kc.ServerURL() + "/",
-		KeycloakRealm:           kc.Realm,
-		UserSuffix:              "@iplantcollaborative.org",
-		ViceDomain:              ".vice.invalid",
-		OutputZone:              "iplant",
-		PathPrefix:              "/formation",
-		ServiceAccountUsernames: map[string]string{auth.AppRunnerRole: "svc"},
-		MCPEnabled:              true,
-		MCPClientID:             "formation-mcp",
-		PublicBaseURL:           "https://de.example.org/formation",
-		MCPScopes:               config.DefaultMCPScopes,
-		MCPLaunchMaxWait:        config.DefaultMCPLaunchMaxWait,
-		MCPBrowseByteLimit:      config.DefaultMCPBrowseByteLimit,
+		KeycloakServerURL:  kc.ServerURL() + "/",
+		KeycloakRealm:      kc.Realm,
+		UserSuffix:         "@iplantcollaborative.org",
+		ViceDomain:         ".vice.invalid",
+		OutputZone:         "iplant",
+		PathPrefix:         "/formation",
+		MCPClientID:        "formation-mcp",
+		PublicBaseURL:      "https://de.example.org/formation",
+		MCPScopes:          config.DefaultMCPScopes,
+		MCPLaunchMaxWait:   config.DefaultMCPLaunchMaxWait,
+		MCPBrowseByteLimit: config.DefaultMCPBrowseByteLimit,
 	}
 
-	callers := auth.NewCallerResolver(auth.NewImpersonator(keycloak), cfg.ServiceAccountUsernames)
 	apps := handlers.NewApps(
 		terrainClient,
 		vice.NewURLChecker(200*time.Millisecond, 1, time.Minute),
 		vice.NewSubdomainResolverWithRetries(terrainClient, 1, time.Millisecond),
-		callers,
 		cfg,
 	)
 	data := handlers.NewData(terrainClient)
@@ -96,7 +89,7 @@ func newEnv(t *testing.T, respond func(r *http.Request) (int, any)) *env {
 	e := echo.New()
 	e.HTTPErrorHandler = apierror.HTTPErrorHandler
 	e.Pre(handlers.StripPathPrefix(cfg.PathPrefix))
-	e.Any("/mcp", echo.WrapHandler(Handler(Deps{Apps: apps, Data: data, Callers: callers, Cfg: cfg}, verifier)))
+	e.Any("/mcp", echo.WrapHandler(Handler(Deps{Apps: apps, Data: data, Cfg: cfg}, verifier)))
 	RegisterWellKnown(e, cfg)
 
 	srv := httptest.NewServer(e)
@@ -243,50 +236,34 @@ func TestMCPListApps(t *testing.T) {
 	}
 }
 
-func TestMCPServiceAccountPolicy(t *testing.T) {
+// TestMCPRejectsServiceAccounts verifies that service-account tokens are
+// turned away at the bearer-token layer: without impersonation their bogus
+// "service-account-*" username would otherwise be forwarded to terrain.
+func TestMCPRejectsServiceAccounts(t *testing.T) {
 	env := newEnv(t, nil)
 
-	t.Run("service account without app-runner role is rejected on apps tools", func(t *testing.T) {
-		session := env.connect(t, map[string]any{"preferred_username": "service-account-ci"})
-		result := callTool(t, session, "list_running_analyses", nil)
-		if !result.IsError {
-			t.Fatal("IsError = false, want rejection")
-		}
-		text := textContent(t, result)
-		want := `Error executing list_running_analyses: service account missing required role: "app-runner"`
-		if text != want {
-			t.Errorf("text = %q, want %q", text, want)
-		}
-	})
+	token := env.kc.Token(t, map[string]any{"preferred_username": "service-account-ci"})
+	req, err := http.NewRequest(http.MethodPost, env.serverURL+"/formation/mcp", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
 
-	t.Run("service account with role acts as the mapped impersonated user", func(t *testing.T) {
-		saEnv := newEnv(t, func(r *http.Request) (int, any) {
-			return 200, map[string]any{"analyses": []map[string]any{}}
-		})
-		exchange := saEnv.kc.ServeTokenExchange(t)
-
-		session := saEnv.connect(t, map[string]any{
-			"preferred_username": "service-account-ci",
-			"realm_access":       map[string]any{"roles": []string{auth.AppRunnerRole}},
-		})
-		result := callTool(t, session, "list_running_analyses", nil)
-		if result.IsError {
-			t.Fatalf("IsError = true: %s", textContent(t, result))
-		}
-		if text := textContent(t, result); text != "No running analyses found" {
-			t.Errorf("text = %q", text)
-		}
-
-		// Terrain must receive the impersonation token for the mapped user.
-		impersonated := exchange.IssuedFor("svc")
-		if impersonated == "" {
-			t.Fatal("no token exchange happened for svc")
-		}
-		calls := saEnv.terrain.Calls()
-		if len(calls) == 0 || calls[0].BearerToken() != impersonated {
-			t.Errorf("terrain calls = %+v, want the impersonation token", calls)
-		}
-	})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "service accounts are not supported"; !strings.Contains(string(body), want) {
+		t.Errorf("body = %q, want containing %q", body, want)
+	}
 }
 
 func TestMCPLaunchAppAndWait(t *testing.T) {
