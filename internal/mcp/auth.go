@@ -88,7 +88,7 @@ func (s *server) appsCaller(ctx context.Context, req *sdk.CallToolRequest) (*aut
 	if err != nil {
 		return nil, err
 	}
-	return s.apps.ResolveCaller(ctx, info)
+	return s.callers.Resolve(ctx, info)
 }
 
 // dataCaller resolves the identity for the data tools, mirroring the REST

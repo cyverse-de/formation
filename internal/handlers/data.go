@@ -131,7 +131,7 @@ func (h *Data) Get(c echo.Context) error {
 	}
 
 	// It's a collection: paging parameters are ignored, like Python.
-	entries, err := h.listEntries(ctx, caller.Token, irodsPath)
+	entries, err := h.listEntries(ctx, caller.Token, irodsPath, st.Children())
 	if err != nil {
 		return err
 	}
@@ -156,10 +156,10 @@ func (h *Data) writeMetadataHeaders(ctx context.Context, c echo.Context, token, 
 	headers := c.Response().Header()
 	for _, avu := range avus {
 		value := avu.Value
-		if avu.Units != "" {
-			value = avu.Value + delimiter + avu.Units
+		if avu.Unit != "" {
+			value = avu.Value + delimiter + avu.Unit
 		}
-		headers["X-Datastore-"+avu.Attribute] = []string{value}
+		headers["X-Datastore-"+avu.Attr] = []string{value}
 	}
 }
 
@@ -262,8 +262,8 @@ func requestBody(c echo.Context) (io.Reader, bool, error) {
 // AVUs, splitting value and units on the delimiter. Attribute names are
 // lowercased, matching the Python version (Starlette lowercases all request
 // header names). Results are sorted by attribute for deterministic ordering.
-func metadataFromHeaders(headers http.Header, delimiter string) []AVU {
-	avus := make([]AVU, 0, len(headers))
+func metadataFromHeaders(headers http.Header, delimiter string) []clients.MetadataAVU {
+	avus := make([]clients.MetadataAVU, 0, len(headers))
 	for name, values := range headers {
 		lower := strings.ToLower(name)
 		if !strings.HasPrefix(lower, metadataHeaderPrefix) || len(values) == 0 {
@@ -279,9 +279,9 @@ func metadataFromHeaders(headers http.Header, delimiter string) []AVU {
 				value, units = split[0], split[1]
 			}
 		}
-		avus = append(avus, AVU{Attribute: attribute, Value: value, Units: units})
+		avus = append(avus, clients.MetadataAVU{Attr: attribute, Value: value, Unit: units})
 	}
-	slices.SortFunc(avus, func(a, b AVU) int { return strings.Compare(a.Attribute, b.Attribute) })
+	slices.SortFunc(avus, func(a, b clients.MetadataAVU) int { return strings.Compare(a.Attr, b.Attr) })
 	return avus
 }
 

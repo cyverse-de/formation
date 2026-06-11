@@ -7,7 +7,6 @@ import "context"
 // analysis names). For service accounts the token is an impersonation token
 // for the mapped username, so terrain sees a first-class user.
 type Caller struct {
-	Info     *Info
 	Token    string
 	Username string
 }
@@ -40,7 +39,7 @@ func (r *CallerResolver) Resolve(ctx context.Context, info *Info) (*Caller, erro
 			return nil, err
 		}
 	}
-	return &Caller{Info: info, Token: token, Username: username}, nil
+	return &Caller{Token: token, Username: username}, nil
 }
 
 // UserCaller resolves the data-path identity: any valid token acts as a user
@@ -50,5 +49,5 @@ func UserCaller(info *Info) (*Caller, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Caller{Info: info, Token: info.Token, Username: username}, nil
+	return &Caller{Token: info.Token, Username: username}, nil
 }

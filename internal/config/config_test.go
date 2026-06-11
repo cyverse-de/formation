@@ -28,7 +28,7 @@ func writeConfig(t *testing.T, contents string) {
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, v := range []string{
-		"OUTPUT_ZONE",
+		"OUTPUT_ZONE", "IRODS_ZONE",
 		"KEYCLOAK_SERVER_URL", "KEYCLOAK_REALM", "KEYCLOAK_CLIENT_ID", "KEYCLOAK_CLIENT_SECRET",
 		"KEYCLOAK_SSL_VERIFY", "TERRAIN_BASE_URL",
 		"USER_SUFFIX", "VICE_DOMAIN", "PATH_PREFIX", "VICE_URL_CHECK_TIMEOUT",

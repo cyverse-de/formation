@@ -121,13 +121,15 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	// OUTPUT_ZONE replaces the old IRODS_ZONE-derived value; the irods.zone
-	// JSON key still works as a fallback so existing configs keep loading.
+	// OUTPUT_ZONE replaces the old IRODS_ZONE-derived value; the IRODS_ZONE
+	// env var and irods.zone JSON key still work as fallbacks so existing
+	// deployments keep starting.
 	cfg.OutputZone = optional("OUTPUT_ZONE", app, "output_zone", "")
 	if cfg.OutputZone == "" {
-		if cfg.OutputZone, err = required("OUTPUT_ZONE", irods, "zone"); err != nil {
-			return nil, err
-		}
+		cfg.OutputZone = optional("IRODS_ZONE", irods, "zone", "")
+	}
+	if cfg.OutputZone == "" {
+		return nil, fmt.Errorf("configuration value OUTPUT_ZONE is not set (not in environment or JSON config)")
 	}
 
 	cfg.ServiceAccountsOnly = boolValue("SERVICE_ACCOUNTS_ONLY", app, "service_accounts_only", false)

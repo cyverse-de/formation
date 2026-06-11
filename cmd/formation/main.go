@@ -154,7 +154,7 @@ func buildServer(cfg *config.Config) (*echo.Echo, error) {
 	e.DELETE("/data/*", data.Delete, requireUser)
 
 	if cfg.MCPEnabled {
-		mcpHandler := mcpserver.Handler(mcpserver.Deps{Apps: apps, Data: data, Cfg: cfg}, verifier)
+		mcpHandler := mcpserver.Handler(mcpserver.Deps{Apps: apps, Data: data, Callers: callers, Cfg: cfg}, verifier)
 		// POST carries JSON-RPC; GET and DELETE are part of the streamable
 		// HTTP transport. The SDK answers its own errors, so the FastAPI-style
 		// error handler stays out of the MCP path.

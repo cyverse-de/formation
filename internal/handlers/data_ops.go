@@ -28,13 +28,6 @@ type Entry struct {
 	Type string `json:"type"`
 }
 
-// AVU is one iRODS attribute-value-units metadata triple.
-type AVU struct {
-	Attribute string
-	Value     string
-	Units     string
-}
-
 // BrowseResult is an in-memory directory listing or file read from Browse.
 type BrowseResult struct {
 	Path      string
@@ -42,7 +35,7 @@ type BrowseResult struct {
 	Entries   []Entry
 	Content   []byte
 	Truncated bool // more file bytes were available than returned
-	Metadata  []AVU
+	Metadata  []clients.MetadataAVU
 }
 
 // upstreamStatus returns the HTTP status of an UpstreamError, or 0.
@@ -75,10 +68,12 @@ func isNotFound(err error) bool {
 }
 
 // isPermissionDenied reports whether the upstream error means the caller
-// lacks permission on the path.
+// lacks permission on the path. ERR_NOT_OWNER covers delete (data-info
+// requires ownership there, not just a write grant) and ERR_NOT_A_USER covers
+// callers whose Keycloak account has no data-store user at all.
 func isPermissionDenied(err error) bool {
 	switch upstreamErrorCode(err) {
-	case "ERR_NOT_READABLE", "ERR_NOT_WRITEABLE", "ERR_NOT_AUTHORIZED":
+	case "ERR_NOT_READABLE", "ERR_NOT_WRITEABLE", "ERR_NOT_AUTHORIZED", "ERR_NOT_OWNER", "ERR_NOT_A_USER":
 		return true
 	}
 	return upstreamStatus(err) == http.StatusForbidden
@@ -106,9 +101,34 @@ func (h *Data) statPath(ctx context.Context, token, irodsPath string) (*clients.
 	return info, nil
 }
 
-// listEntries reads the full directory listing reshaped to formation entries.
-func (h *Data) listEntries(ctx context.Context, token, irodsPath string) ([]Entry, error) {
-	folders, files, err := h.terrain.ListDirectory(ctx, token, irodsPath)
+// responseID extracts the data id from a terrain response: the upload and
+// overwrite endpoints nest the stat record under "file", directory creation
+// returns it at the top level.
+func responseID(response map[string]any) string {
+	if file, ok := response["file"].(map[string]any); ok {
+		response = file
+	}
+	id, _ := response["id"].(string)
+	return id
+}
+
+// pathID returns a data id from the response when present, falling back to a
+// stat call for responses that omit it.
+func (h *Data) pathID(ctx context.Context, token, irodsPath string, response map[string]any) (string, error) {
+	if id := responseID(response); id != "" {
+		return id, nil
+	}
+	st, err := h.statPath(ctx, token, irodsPath)
+	if err != nil {
+		return "", err
+	}
+	return st.ID, nil
+}
+
+// listEntries reads the full directory listing reshaped to formation entries;
+// children sizes the listing request from the directory's stat record.
+func (h *Data) listEntries(ctx context.Context, token, irodsPath string, children int) ([]Entry, error) {
+	folders, files, err := h.terrain.ListDirectory(ctx, token, irodsPath, children)
 	if err != nil {
 		return nil, mapDataError(err, irodsPath, "Path")
 	}
@@ -138,24 +158,21 @@ func (h *Data) openRange(ctx context.Context, token, irodsPath string, offset in
 	return reader, nil
 }
 
-// pathMetadata returns the data item's iRODS AVUs reshaped to formation AVUs.
-func (h *Data) pathMetadata(ctx context.Context, token, dataID string) ([]AVU, error) {
+// pathMetadata returns the data item's iRODS AVUs.
+func (h *Data) pathMetadata(ctx context.Context, token, dataID string) ([]clients.MetadataAVU, error) {
 	avus, _, err := h.terrain.GetMetadata(ctx, token, dataID)
-	if err != nil {
-		return nil, err
-	}
-	converted := make([]AVU, 0, len(avus))
-	for _, avu := range avus {
-		converted = append(converted, AVU{Attribute: avu.Attr, Value: avu.Value, Units: avu.Unit})
-	}
-	return converted, nil
+	return avus, err
 }
 
-// setMetadata reproduces the previous per-attribute iRODS semantics on top of
-// terrain's set-the-full-listing endpoint: with replace, the attributes being
-// set lose their existing AVUs first; without it, the new AVUs are added
-// alongside the existing ones.
-func (h *Data) setMetadata(ctx context.Context, token, dataID string, metadata []AVU, replace bool) error {
+// setMetadata applies AVUs with the previous iRODS semantics: without replace
+// the AVUs are simply added alongside the existing ones; with replace, the
+// attributes being set lose their existing AVUs first, via terrain's
+// set-the-full-listing endpoint.
+func (h *Data) setMetadata(ctx context.Context, token, dataID string, metadata []clients.MetadataAVU, replace bool) error {
+	if !replace {
+		return h.terrain.AddMetadata(ctx, token, dataID, metadata)
+	}
+
 	existing, rest, err := h.terrain.GetMetadata(ctx, token, dataID)
 	if err != nil {
 		return err
@@ -163,25 +180,24 @@ func (h *Data) setMetadata(ctx context.Context, token, dataID string, metadata [
 
 	newAttrs := make(map[string]bool, len(metadata))
 	for _, avu := range metadata {
-		newAttrs[avu.Attribute] = true
+		newAttrs[avu.Attr] = true
 	}
 
 	merged := make([]clients.MetadataAVU, 0, len(existing)+len(metadata))
 	seen := make(map[clients.MetadataAVU]bool, len(existing)+len(metadata))
 	for _, avu := range existing {
-		if replace && newAttrs[avu.Attr] {
+		if newAttrs[avu.Attr] {
 			continue
 		}
 		merged = append(merged, avu)
 		seen[avu] = true
 	}
 	for _, avu := range metadata {
-		converted := clients.MetadataAVU{Attr: avu.Attribute, Value: avu.Value, Unit: avu.Units}
-		if seen[converted] {
+		if seen[avu] {
 			continue
 		}
-		merged = append(merged, converted)
-		seen[converted] = true
+		merged = append(merged, avu)
+		seen[avu] = true
 	}
 
 	return h.terrain.SetMetadata(ctx, token, dataID, merged, rest)
@@ -198,7 +214,7 @@ func (h *Data) Browse(ctx context.Context, token, irodsPath string, offset, limi
 	result := &BrowseResult{Path: irodsPath}
 	if st.IsDirectory() {
 		result.Type = TypeCollection
-		entries, err := h.listEntries(ctx, token, irodsPath)
+		entries, err := h.listEntries(ctx, token, irodsPath, st.Children())
 		if err != nil {
 			return nil, err
 		}
@@ -238,7 +254,7 @@ func (h *Data) Browse(ctx context.Context, token, irodsPath string, offset, limi
 
 // UploadFile stores file content at irodsPath, creating or overwriting it,
 // and optionally sets metadata.
-func (h *Data) UploadFile(ctx context.Context, token, irodsPath string, content io.Reader, metadata []AVU, replace bool) (map[string]any, error) {
+func (h *Data) UploadFile(ctx context.Context, token, irodsPath string, content io.Reader, metadata []clients.MetadataAVU, replace bool) (map[string]any, error) {
 	st, err := h.terrain.Stat(ctx, token, irodsPath)
 	switch {
 	case err == nil:
@@ -271,15 +287,16 @@ func (h *Data) UploadFile(ctx context.Context, token, irodsPath string, content 
 			return nil, apierror.NewPermissionDenied("")
 		}
 
-		if _, err := h.terrain.UploadFile(ctx, token, parent, path.Base(irodsPath), content); err != nil {
+		uploaded, err := h.terrain.UploadFile(ctx, token, parent, path.Base(irodsPath), content)
+		if err != nil {
 			return nil, mapDataError(err, irodsPath, "Path")
 		}
 		if len(metadata) > 0 {
-			created, err := h.statPath(ctx, token, irodsPath)
+			id, err := h.pathID(ctx, token, irodsPath, uploaded)
 			if err != nil {
 				return nil, err
 			}
-			if err := h.setMetadata(ctx, token, created.ID, metadata, replace); err != nil {
+			if err := h.setMetadata(ctx, token, id, metadata, replace); err != nil {
 				return nil, mapDataError(err, irodsPath, "Path")
 			}
 		}
@@ -291,7 +308,7 @@ func (h *Data) UploadFile(ctx context.Context, token, irodsPath string, content 
 }
 
 // UpdateMetadata sets AVUs on an existing file or collection.
-func (h *Data) UpdateMetadata(ctx context.Context, token, irodsPath string, metadata []AVU, replace bool) (map[string]any, error) {
+func (h *Data) UpdateMetadata(ctx context.Context, token, irodsPath string, metadata []clients.MetadataAVU, replace bool) (map[string]any, error) {
 	st, err := h.statPath(ctx, token, irodsPath)
 	if err != nil {
 		return nil, err
@@ -312,7 +329,7 @@ func (h *Data) UpdateMetadata(ctx context.Context, token, irodsPath string, meta
 
 // MakeDirectory creates a collection with optional metadata. An existing
 // path becomes a metadata-only update, matching the PUT semantics.
-func (h *Data) MakeDirectory(ctx context.Context, token, irodsPath string, metadata []AVU, replace bool) (map[string]any, error) {
+func (h *Data) MakeDirectory(ctx context.Context, token, irodsPath string, metadata []clients.MetadataAVU, replace bool) (map[string]any, error) {
 	if _, err := h.terrain.Stat(ctx, token, irodsPath); err == nil {
 		return h.UpdateMetadata(ctx, token, irodsPath, metadata, replace)
 	} else if !isNotFound(err) {
@@ -331,15 +348,16 @@ func (h *Data) MakeDirectory(ctx context.Context, token, irodsPath string, metad
 		return nil, apierror.NewPermissionDenied("")
 	}
 
-	if err := h.terrain.CreateDirectory(ctx, token, irodsPath); err != nil {
+	created, err := h.terrain.CreateDirectory(ctx, token, irodsPath)
+	if err != nil {
 		return nil, mapDataError(err, irodsPath, "Path")
 	}
 	if len(metadata) > 0 {
-		created, err := h.statPath(ctx, token, irodsPath)
+		id, err := h.pathID(ctx, token, irodsPath, created)
 		if err != nil {
 			return nil, err
 		}
-		if err := h.setMetadata(ctx, token, created.ID, metadata, replace); err != nil {
+		if err := h.setMetadata(ctx, token, id, metadata, replace); err != nil {
 			return nil, mapDataError(err, irodsPath, "Path")
 		}
 	}

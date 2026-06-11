@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -40,12 +39,6 @@ func NewApps(terrainClient *clients.Terrain, urls *vice.URLChecker, subdomains *
 		viceDomain: cfg.ViceDomain,
 		outputZone: cfg.OutputZone,
 	}
-}
-
-// ResolveCaller resolves an authenticated identity into a terrain-ready
-// Caller; exported so the MCP tools share the same resolution.
-func (h *Apps) ResolveCaller(ctx context.Context, info *auth.Info) (*auth.Caller, error) {
-	return h.callers.Resolve(ctx, info)
 }
 
 // caller resolves the request's identity into a terrain-ready Caller.

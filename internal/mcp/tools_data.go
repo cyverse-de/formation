@@ -8,7 +8,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/cyverse-de/formation/internal/handlers"
+	"github.com/cyverse-de/formation/internal/clients"
 )
 
 type browseDataInput struct {
@@ -84,16 +84,16 @@ func irodsPath(p string) string {
 // avusFromMap converts tool metadata to AVUs the same way the REST API reads
 // X-Datastore-* headers: attribute names lowercased, values split into value
 // and units on the first comma, sorted by attribute.
-func avusFromMap(metadata map[string]string) []handlers.AVU {
-	avus := make([]handlers.AVU, 0, len(metadata))
+func avusFromMap(metadata map[string]string) []clients.MetadataAVU {
+	avus := make([]clients.MetadataAVU, 0, len(metadata))
 	for attribute, value := range metadata {
 		units := ""
 		if split := strings.SplitN(value, ",", 2); len(split) == 2 {
 			value, units = split[0], split[1]
 		}
-		avus = append(avus, handlers.AVU{Attribute: strings.ToLower(attribute), Value: value, Units: units})
+		avus = append(avus, clients.MetadataAVU{Attr: strings.ToLower(attribute), Value: value, Unit: units})
 	}
-	slices.SortFunc(avus, func(a, b handlers.AVU) int { return strings.Compare(a.Attribute, b.Attribute) })
+	slices.SortFunc(avus, func(a, b clients.MetadataAVU) int { return strings.Compare(a.Attr, b.Attr) })
 	return avus
 }
 

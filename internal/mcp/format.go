@@ -177,6 +177,16 @@ func formatInteractiveLaunch(analysisID string, status map[string]any, waitSecon
 	return b.String()
 }
 
+func formatLaunchPollFailure(analysisID string, err error) string {
+	var b strings.Builder
+	b.WriteString("Analysis launched successfully!\n\n")
+	fmt.Fprintf(&b, "**Analysis ID:** `%s`\n", analysisID)
+	b.WriteString("**Status:** unknown — status polling failed\n")
+	fmt.Fprintf(&b, "\nStatus check error: %s\n", err)
+	b.WriteString("Use get_analysis_status to check readiness.\n")
+	return b.String()
+}
+
 func formatBatchLaunch(analysisID, jobType string) string {
 	var b strings.Builder
 	b.WriteString("Analysis launched successfully!\n\n")
@@ -232,10 +242,10 @@ func formatBrowse(result *handlers.BrowseResult) string {
 		b.WriteString("\n\n**Metadata:**\n")
 		for _, avu := range result.Metadata {
 			value := avu.Value
-			if avu.Units != "" {
-				value += "," + avu.Units
+			if avu.Unit != "" {
+				value += "," + avu.Unit
 			}
-			fmt.Fprintf(&b, "- %s: %s\n", avu.Attribute, value)
+			fmt.Fprintf(&b, "- %s: %s\n", avu.Attr, value)
 		}
 	}
 	return b.String()

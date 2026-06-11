@@ -162,27 +162,57 @@ func isConnectError(err error) bool {
 }
 
 // SubdomainResolver looks up the subdomain for a VICE analysis via terrain,
-// retrying while the deployment's async data is not ready.
+// retrying while the deployment's async data is not ready. Successful
+// resolutions are cached: a subdomain never changes once assigned, and status
+// polling re-resolves the same analysis until its URL responds.
 type SubdomainResolver struct {
 	terrain    *clients.Terrain
 	maxRetries int
 	retryDelay time.Duration
+
+	mu sync.Mutex
+	// The cache is unbounded like the URL checker's; entries are tiny and
+	// keyed by polled analyses, so growth is negligible in practice.
+	cache map[string]string
 }
 
 // NewSubdomainResolver uses the Python defaults of 5 retries, 1s apart.
 func NewSubdomainResolver(terrain *clients.Terrain) *SubdomainResolver {
-	return &SubdomainResolver{terrain: terrain, maxRetries: 5, retryDelay: time.Second}
+	return NewSubdomainResolverWithRetries(terrain, 5, time.Second)
 }
 
 // NewSubdomainResolverWithRetries allows tests to shorten the retry loop.
 func NewSubdomainResolverWithRetries(terrain *clients.Terrain, maxRetries int, retryDelay time.Duration) *SubdomainResolver {
-	return &SubdomainResolver{terrain: terrain, maxRetries: maxRetries, retryDelay: retryDelay}
+	return &SubdomainResolver{
+		terrain:    terrain,
+		maxRetries: maxRetries,
+		retryDelay: retryDelay,
+		cache:      make(map[string]string),
+	}
 }
 
 // Resolve returns the analysis subdomain, or "" if it cannot be determined.
 // All failures are swallowed (logged upstream as needed) like the Python
 // helper, since a missing subdomain just means no URL in the response.
 func (r *SubdomainResolver) Resolve(ctx context.Context, token, analysisID string) string {
+	r.mu.Lock()
+	cached := r.cache[analysisID]
+	r.mu.Unlock()
+	if cached != "" {
+		return cached
+	}
+
+	subdomain := r.resolve(ctx, token, analysisID)
+	if subdomain != "" {
+		r.mu.Lock()
+		r.cache[analysisID] = subdomain
+		r.mu.Unlock()
+	}
+	return subdomain
+}
+
+// resolve performs the uncached external-id and async-data lookups.
+func (r *SubdomainResolver) resolve(ctx context.Context, token, analysisID string) string {
 	externalIDResponse, err := r.terrain.GetExternalID(ctx, token, analysisID)
 	if err != nil {
 		return ""

@@ -172,7 +172,10 @@ func (s *server) launchAppAndWait(ctx context.Context, req *sdk.CallToolRequest,
 	for time.Since(start) < maxWait {
 		status, err := s.apps.AnalysisStatus(ctx, caller, analysisID)
 		if err != nil {
-			return nil, err
+			// The analysis is already launched; a failed status poll (e.g.
+			// the caller's token expiring mid-wait) must not read as a
+			// launch failure.
+			return textResult(formatLaunchPollFailure(analysisID, err)), nil
 		}
 		if ready, _ := status["url_ready"].(bool); ready {
 			return textResult(formatInteractiveLaunch(analysisID, status, int(time.Since(start).Seconds()))), nil

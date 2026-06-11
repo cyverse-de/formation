@@ -232,17 +232,17 @@ func TestDataPutCreateFile(t *testing.T) {
 	if body["path"] != "/iplant/home/alice/new.txt" || body["type"] != "data_object" || body["created"] != true {
 		t.Errorf("body = %v", body)
 	}
-	if got := string(env.data.Uploads["/iplant/home/alice/new.txt"]); got != "hello world" {
+	if got := string(env.data.Files["/iplant/home/alice/new.txt"]); got != "hello world" {
 		t.Errorf("uploaded content = %q", got)
 	}
 
-	if len(env.data.MetaSets) != 1 {
-		t.Fatalf("metadata sets = %d, want 1", len(env.data.MetaSets))
+	if len(env.data.MetaAdds) != 1 {
+		t.Fatalf("metadata adds = %d, want 1", len(env.data.MetaAdds))
 	}
 	// Attribute names are lowercased like the Python version; units split on
 	// the delimiter; sorted by attribute.
 	want := []terraintest.DataAVU{{Attr: "author", Value: "alice"}, {Attr: "weight", Value: "12", Unit: "kg"}}
-	if got := env.data.MetaSets[0].AVUs; !slices.Equal(got, want) {
+	if got := env.data.MetaAdds[0].AVUs; !slices.Equal(got, want) {
 		t.Errorf("avus = %v, want %v", got, want)
 	}
 }
@@ -259,10 +259,10 @@ func TestDataPutUpdateFile(t *testing.T) {
 	if body["created"] != false || body["type"] != "data_object" {
 		t.Errorf("body = %v", body)
 	}
-	if got := string(env.data.Uploads["/iplant/file.txt"]); got != "new contents" {
+	if got := string(env.data.Files["/iplant/file.txt"]); got != "new contents" {
 		t.Errorf("uploaded content = %q", got)
 	}
-	if len(env.data.MetaSets) != 0 {
+	if len(env.data.MetaSets)+len(env.data.MetaAdds) != 0 {
 		t.Error("metadata should not be set without metadata headers")
 	}
 }
@@ -302,9 +302,14 @@ func TestDataPutMetadataOnly(t *testing.T) {
 		if rec.Code != 200 {
 			t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
 		}
-		want := []terraintest.DataAVU{{Attr: "author", Value: "old-author"}, {Attr: "author", Value: "bob"}}
-		if len(env.data.MetaSets) != 1 || !slices.Equal(env.data.MetaSets[0].AVUs, want) {
-			t.Errorf("metadata sets = %+v, want %v", env.data.MetaSets, want)
+		// Adds go through the add endpoint, leaving existing values in place.
+		wantAdd := []terraintest.DataAVU{{Attr: "author", Value: "bob"}}
+		if len(env.data.MetaAdds) != 1 || !slices.Equal(env.data.MetaAdds[0].AVUs, wantAdd) {
+			t.Errorf("metadata adds = %+v, want %v", env.data.MetaAdds, wantAdd)
+		}
+		wantMeta := []terraintest.DataAVU{{Attr: "author", Value: "old-author"}, {Attr: "author", Value: "bob"}}
+		if got := env.data.Meta["/iplant/file.txt"]; !slices.Equal(got, wantMeta) {
+			t.Errorf("final metadata = %v, want %v", got, wantMeta)
 		}
 	})
 
@@ -321,8 +326,8 @@ func TestDataPutMetadataOnly(t *testing.T) {
 		if body["type"] != "collection" || body["created"] != false {
 			t.Errorf("body = %v", body)
 		}
-		if len(env.data.MetaSets) != 1 || env.data.MetaSets[0].Path != "/iplant/dir" {
-			t.Errorf("metadata sets = %+v", env.data.MetaSets)
+		if len(env.data.MetaAdds) != 1 || env.data.MetaAdds[0].Path != "/iplant/dir" {
+			t.Errorf("metadata adds = %+v", env.data.MetaAdds)
 		}
 	})
 }

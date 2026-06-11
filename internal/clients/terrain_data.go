@@ -73,12 +73,17 @@ const listDirectoryPageSize = 1000
 
 // ListDirectory returns the names of a directory's subdirectories and files,
 // paging through terrain's listing endpoint until the whole directory is read.
-func (t *Terrain) ListDirectory(ctx context.Context, token, path string) (folders, files []string, err error) {
-	for offset := 0; ; offset += listDirectoryPageSize {
+// sizeHint (e.g. the stat record's child count) sizes the first request so a
+// directory of known size is fetched in one round trip.
+func (t *Terrain) ListDirectory(ctx context.Context, token, path string, sizeHint int) (folders, files []string, err error) {
+	folders = make([]string, 0, sizeHint)
+	files = make([]string, 0, sizeHint)
+	for fetched := 0; ; {
+		limit := max(listDirectoryPageSize, sizeHint-fetched)
 		query := url.Values{
 			"path":   {path},
-			"limit":  {strconv.Itoa(listDirectoryPageSize)},
-			"offset": {strconv.Itoa(offset)},
+			"limit":  {strconv.Itoa(limit)},
+			"offset": {strconv.Itoa(fetched)},
 		}
 		data, err := doJSON(ctx, t.client, http.MethodGet,
 			endpoint(t.base, query, "secured", "filesystem", "paged-directory"), token, nil)
@@ -104,10 +109,29 @@ func (t *Terrain) ListDirectory(ctx context.Context, token, path string) (folder
 		for _, file := range page.Files {
 			files = append(files, file.Label)
 		}
-		if offset+listDirectoryPageSize >= page.Total {
+
+		pageSize := len(page.Folders) + len(page.Files)
+		fetched += pageSize
+		if fetched >= page.Total || pageSize == 0 {
 			return folders, files, nil
 		}
 	}
+}
+
+// doStream executes a request with the caller's bearer token on the streaming
+// client, mapping non-2xx responses to UpstreamError like doJSON.
+func (t *Terrain) doStream(req *http.Request, token string) (*http.Response, error) {
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := t.stream.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		return nil, &apierror.UpstreamError{Status: resp.StatusCode, Body: string(body)}
+	}
+	return resp, nil
 }
 
 // DownloadFile streams a file's raw contents; the caller must close the reader.
@@ -118,16 +142,9 @@ func (t *Terrain) DownloadFile(ctx context.Context, token, path string) (io.Read
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := t.stream.Do(req)
+	resp, err := t.doStream(req, token)
 	if err != nil {
 		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		defer func() { _ = resp.Body.Close() }()
-		body, _ := io.ReadAll(resp.Body)
-		return nil, &apierror.UpstreamError{Status: resp.StatusCode, Body: string(body)}
 	}
 	return resp.Body, nil
 }
@@ -167,9 +184,8 @@ func (t *Terrain) uploadMultipart(ctx context.Context, rawurl, token, filename s
 		return nil, err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := t.stream.Do(req)
+	resp, err := t.doStream(req, token)
 	if err != nil {
 		return nil, err
 	}
@@ -179,18 +195,19 @@ func (t *Terrain) uploadMultipart(ctx context.Context, rawurl, token, filename s
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &apierror.UpstreamError{Status: resp.StatusCode, Body: string(data)}
-	}
 	return decodeMap(data, rawurl)
 }
 
-// CreateDirectory creates a directory, along with any missing intermediates.
-func (t *Terrain) CreateDirectory(ctx context.Context, token, path string) error {
-	_, err := doJSON(ctx, t.client, http.MethodPost,
+// CreateDirectory creates a directory, along with any missing intermediates,
+// returning terrain's stat record for it (including the data id).
+func (t *Terrain) CreateDirectory(ctx context.Context, token, path string) (map[string]any, error) {
+	data, err := doJSON(ctx, t.client, http.MethodPost,
 		endpoint(t.base, nil, "secured", "filesystem", "directory", "create"), token,
 		map[string]any{"path": path})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return decodeMap(data, "directory create")
 }
 
 // MetadataAVU is one iRODS AVU in terrain's metadata payloads.
@@ -235,6 +252,15 @@ func (t *Terrain) SetMetadata(ctx context.Context, token, dataID string, avus []
 
 	_, err := doJSON(ctx, t.client, http.MethodPost,
 		endpoint(t.base, nil, "secured", "filesystem", dataID, "metadata"), token, body)
+	return err
+}
+
+// AddMetadata associates additional iRODS AVUs with a data item without
+// touching the existing ones; exact duplicates are ignored upstream.
+func (t *Terrain) AddMetadata(ctx context.Context, token, dataID string, avus []MetadataAVU) error {
+	_, err := doJSON(ctx, t.client, http.MethodPost,
+		endpoint(t.base, nil, "secured", "filesystem", dataID, "metadata", "add"), token,
+		map[string]any{"irods-avus": avus})
 	return err
 }
 

@@ -96,7 +96,7 @@ func newEnv(t *testing.T, respond func(r *http.Request) (int, any)) *env {
 	e := echo.New()
 	e.HTTPErrorHandler = apierror.HTTPErrorHandler
 	e.Pre(handlers.StripPathPrefix(cfg.PathPrefix))
-	e.Any("/mcp", echo.WrapHandler(Handler(Deps{Apps: apps, Data: data, Cfg: cfg}, verifier)))
+	e.Any("/mcp", echo.WrapHandler(Handler(Deps{Apps: apps, Data: data, Callers: callers, Cfg: cfg}, verifier)))
 	RegisterWellKnown(e, cfg)
 
 	srv := httptest.NewServer(e)
@@ -476,14 +476,14 @@ func TestMCPDataTools(t *testing.T) {
 		if text := textContent(t, result); text != "File created: `/iplant/home/alice/new.txt`" {
 			t.Errorf("text = %q", text)
 		}
-		if got := string(env.data.Uploads["/iplant/home/alice/new.txt"]); got != "hello world" {
+		if got := string(env.data.Files["/iplant/home/alice/new.txt"]); got != "hello world" {
 			t.Errorf("uploaded content = %q", got)
 		}
 
 		// Attributes lowercased and units split on comma, like the REST headers.
 		wantAVUs := []terraintest.DataAVU{{Attr: "author", Value: "alice"}, {Attr: "weight", Value: "12", Unit: "kg"}}
-		if len(env.data.MetaSets) != 1 || !slices.Equal(env.data.MetaSets[0].AVUs, wantAVUs) {
-			t.Errorf("MetaSets = %+v", env.data.MetaSets)
+		if len(env.data.MetaAdds) != 1 || !slices.Equal(env.data.MetaAdds[0].AVUs, wantAVUs) {
+			t.Errorf("MetaAdds = %+v", env.data.MetaAdds)
 		}
 	})
 

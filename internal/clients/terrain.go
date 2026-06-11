@@ -63,15 +63,23 @@ func (t *Terrain) SubmitAnalysis(ctx context.Context, token string, submission m
 	return decodeMap(data, u)
 }
 
+// listingFilter builds terrain's JSON-encoded analysis listing filter.
+func listingFilter(field, value string) (url.Values, error) {
+	filter, err := json.Marshal([]map[string]string{{"field": field, "value": value}})
+	if err != nil {
+		return nil, err
+	}
+	return url.Values{"filter": {string(filter)}}, nil
+}
+
 // GetAnalysis looks up one analysis. Terrain has no GET /analyses/{id}, so
 // this filters the listing endpoint by id; an empty result becomes a 404
 // UpstreamError, matching the Python client's synthesized error.
 func (t *Terrain) GetAnalysis(ctx context.Context, token, analysisID string) (map[string]any, error) {
-	filter, err := json.Marshal([]map[string]string{{"field": "id", "value": analysisID}})
+	query, err := listingFilter("id", analysisID)
 	if err != nil {
 		return nil, err
 	}
-	query := url.Values{"filter": {string(filter)}}
 
 	result, err := getMap(ctx, t.client, endpoint(t.base, query, "analyses"), token)
 	if err != nil {
@@ -93,11 +101,10 @@ func (t *Terrain) GetAnalysis(ctx context.Context, token, analysisID string) (ma
 func (t *Terrain) ListAnalyses(ctx context.Context, token, status string) (map[string]any, error) {
 	query := url.Values{}
 	if status != "" {
-		filter, err := json.Marshal([]map[string]string{{"field": "status", "value": status}})
-		if err != nil {
+		var err error
+		if query, err = listingFilter("status", status); err != nil {
 			return nil, err
 		}
-		query.Set("filter", string(filter))
 	}
 	return getMap(ctx, t.client, endpoint(t.base, query, "analyses"), token)
 }

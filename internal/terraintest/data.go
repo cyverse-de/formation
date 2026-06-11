@@ -43,20 +43,19 @@ type Data struct {
 	// MetaErr makes metadata lookups fail, like a metadata-service outage.
 	MetaErr bool
 
-	Uploads     map[string][]byte
 	CreatedDirs []string
 	Deleted     []string
 	MetaSets    []MetadataSet
+	MetaAdds    []MetadataSet
 }
 
 // NewData returns an empty fake data store.
 func NewData() *Data {
 	return &Data{
-		Files:   map[string][]byte{},
-		Dirs:    map[string][]DataEntry{},
-		Perms:   map[string]string{},
-		Meta:    map[string][]DataAVU{},
-		Uploads: map[string][]byte{},
+		Files: map[string][]byte{},
+		Dirs:  map[string][]DataEntry{},
+		Perms: map[string]string{},
+		Meta:  map[string][]DataAVU{},
 	}
 }
 
@@ -149,9 +148,49 @@ func (d *Data) Respond(r *http.Request) (int, any) {
 		return d.delete(r)
 	case strings.HasPrefix(p, "/secured/filesystem/") && strings.HasSuffix(p, "/metadata"):
 		return d.metadata(r)
+	case r.Method == http.MethodPost && strings.HasPrefix(p, "/secured/filesystem/") && strings.HasSuffix(p, "/metadata/add"):
+		return d.metadataAdd(r)
 	default:
 		return http.StatusInternalServerError, nil
 	}
+}
+
+// metadataPath resolves the data-id segment of a metadata route back to a path.
+func (d *Data) metadataPath(r *http.Request, suffix string) (string, bool) {
+	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/secured/filesystem/"), suffix)
+	p, err := url.PathUnescape(id)
+	if err != nil || !d.exists(p) {
+		return "", false
+	}
+	return p, true
+}
+
+func (d *Data) metadataAdd(r *http.Request) (int, any) {
+	p, ok := d.metadataPath(r, "/metadata/add")
+	if !ok {
+		return http.StatusNotFound, errorBody("ERR_NOT_FOUND")
+	}
+	if !d.writable(p) {
+		return http.StatusInternalServerError, errorBody("ERR_NOT_WRITEABLE")
+	}
+
+	var body struct {
+		IRODSAVUs []DataAVU `json:"irods-avus"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	// Exact duplicates are silently skipped, like data-info's add.
+	existing := make(map[DataAVU]bool, len(d.Meta[p]))
+	for _, avu := range d.Meta[p] {
+		existing[avu] = true
+	}
+	for _, avu := range body.IRODSAVUs {
+		if !existing[avu] {
+			d.Meta[p] = append(d.Meta[p], avu)
+		}
+	}
+	d.MetaAdds = append(d.MetaAdds, MetadataSet{Path: p, AVUs: body.IRODSAVUs})
+	return http.StatusOK, map[string]any{"path": p, "user": "fake"}
 }
 
 func (d *Data) stat(r *http.Request) (int, any) {
@@ -248,7 +287,6 @@ func (d *Data) upload(r *http.Request) (int, any) {
 	}
 
 	d.Files[target] = content
-	d.Uploads[target] = content
 	d.Dirs[dest] = append(d.Dirs[dest], DataEntry{Name: filename})
 	return http.StatusOK, map[string]any{"file": map[string]any{"id": dataID(target), "path": target}}
 }
@@ -270,7 +308,6 @@ func (d *Data) overwrite(r *http.Request) (int, any) {
 		return http.StatusBadRequest, errorBody("ERR_BAD_OR_MISSING_FIELD")
 	}
 	d.Files[dest] = content
-	d.Uploads[dest] = content
 	return http.StatusOK, map[string]any{"file": map[string]any{"id": dataID(dest), "path": dest}}
 }
 

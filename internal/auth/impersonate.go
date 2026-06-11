@@ -41,6 +41,10 @@ type Impersonator struct {
 
 	mu    sync.Mutex
 	cache map[string]impersonatedToken
+	// locks serializes exchanges per username so a burst of cache misses
+	// (e.g. workshop-scale concurrent launches at a token-expiry boundary)
+	// results in one Keycloak round trip instead of one per request.
+	locks map[string]*sync.Mutex
 }
 
 type impersonatedToken struct {
@@ -50,20 +54,51 @@ type impersonatedToken struct {
 
 // NewImpersonator builds an Impersonator backed by the Keycloak client.
 func NewImpersonator(kc *Keycloak) *Impersonator {
-	return &Impersonator{kc: kc, cache: make(map[string]impersonatedToken)}
+	return &Impersonator{
+		kc:    kc,
+		cache: make(map[string]impersonatedToken),
+		locks: make(map[string]*sync.Mutex),
+	}
+}
+
+// userLock returns the per-username exchange lock; the lock map is bounded by
+// the configured service-account username mappings.
+func (i *Impersonator) userLock(username string) *sync.Mutex {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	lock, ok := i.locks[username]
+	if !ok {
+		lock = &sync.Mutex{}
+		i.locks[username] = lock
+	}
+	return lock
+}
+
+// cachedToken returns a still-valid cached token, pruning an expired entry.
+func (i *Impersonator) cachedToken(username string) (string, bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	cached, ok := i.cache[username]
+	if !ok {
+		return "", false
+	}
+	if time.Now().Before(cached.expires) {
+		return cached.token, true
+	}
+	delete(i.cache, username)
+	return "", false
 }
 
 // TokenFor returns a cached or freshly exchanged access token for username,
 // using subjectToken (the service account's own token) as the exchange subject.
 func (i *Impersonator) TokenFor(ctx context.Context, subjectToken, username string) (string, error) {
-	now := time.Now()
+	lock := i.userLock(username)
+	lock.Lock()
+	defer lock.Unlock()
 
-	i.mu.Lock()
-	if cached, ok := i.cache[username]; ok && now.Before(cached.expires) {
-		i.mu.Unlock()
-		return cached.token, nil
+	if token, ok := i.cachedToken(username); ok {
+		return token, nil
 	}
-	i.mu.Unlock()
 
 	token, lifetime, err := i.kc.ImpersonationToken(ctx, subjectToken, username)
 	if err != nil {
@@ -74,7 +109,7 @@ func (i *Impersonator) TokenFor(ctx context.Context, subjectToken, username stri
 
 	if lifetime > impersonationExpiryMargin {
 		i.mu.Lock()
-		i.cache[username] = impersonatedToken{token: token, expires: now.Add(lifetime - impersonationExpiryMargin)}
+		i.cache[username] = impersonatedToken{token: token, expires: time.Now().Add(lifetime - impersonationExpiryMargin)}
 		i.mu.Unlock()
 	}
 	return token, nil
