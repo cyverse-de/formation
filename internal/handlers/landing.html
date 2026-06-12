@@ -177,6 +177,9 @@
       {{range .Tools}}<li class="chip">{{.}}</li>
       {{end}}
     </ul>
+    <p class="muted">Data access is text-based only: <code>browse_data</code> returns file
+    contents inline, so reads consume conversation context (use offset/limit to page), and
+    binary files such as images or archives cannot be retrieved.</p>
   </section>
 
   <footer>

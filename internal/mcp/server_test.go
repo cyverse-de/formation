@@ -479,10 +479,22 @@ func TestMCPDataTools(t *testing.T) {
 			"path": "/iplant/file.txt", "limit": 4, "include_metadata": true,
 		})
 		text := textContent(t, result)
-		for _, want := range []string{"**File Content:**", "```\n0123\n```", "*(content truncated", "- weight: 12,kg"} {
+		for _, want := range []string{"**File Content:**", "```\n0123\n```", "*(truncated", "- weight: 12,kg"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("text missing %q:\n%s", want, text)
 			}
+		}
+	})
+
+	t.Run("browse binary file reports unsupported", func(t *testing.T) {
+		env := newEnv(t, nil)
+		env.data.Files["/iplant/blob.bin"] = []byte{0xff, 0xfe, 0x00, 0x01}
+
+		session := env.connect(t, nil)
+		result := callTool(t, session, "browse_data", map[string]any{"path": "/iplant/blob.bin"})
+		text := textContent(t, result)
+		if !strings.Contains(text, "**Unsupported file type:**") || !strings.Contains(text, "text content only") {
+			t.Errorf("binary text missing the unsupported-type notice:\n%s", text)
 		}
 	})
 
