@@ -23,6 +23,7 @@ var launchPollInterval = 5 * time.Second
 type Deps struct {
 	Apps *handlers.Apps
 	Data *handlers.Data
+	User *handlers.User
 	Cfg  *config.Config
 }
 
@@ -30,6 +31,7 @@ type Deps struct {
 type server struct {
 	apps *handlers.Apps
 	data *handlers.Data
+	user *handlers.User
 	cfg  *config.Config
 }
 
@@ -37,6 +39,7 @@ type server struct {
 // landing page renders it, and TestMCPListTools keeps it in sync with the
 // actual registrations.
 var ToolNames = []string{
+	"whoami",
 	"list_apps", "launch_app_and_wait", "get_analysis_status",
 	"list_running_analyses", "get_app_parameters", "stop_analysis",
 	"browse_data", "create_directory", "upload_file", "set_metadata",
@@ -45,12 +48,13 @@ var ToolNames = []string{
 
 // NewServer builds the MCP server with all formation tools registered.
 func NewServer(d Deps) *sdk.Server {
-	s := &server{apps: d.Apps, data: d.Data, cfg: d.Cfg}
+	s := &server{apps: d.Apps, data: d.Data, user: d.User, cfg: d.Cfg}
 	srv := sdk.NewServer(&sdk.Implementation{
 		Name:    "formation",
 		Title:   "CyVerse Formation",
 		Version: "1.0.0",
 	}, nil)
+	s.registerUserTools(srv)
 	s.registerAppsTools(srv)
 	s.registerDataTools(srv)
 	return srv

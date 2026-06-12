@@ -12,25 +12,25 @@ import (
 )
 
 type browseDataInput struct {
-	Path            string `json:"path" jsonschema:"Full iRODS path to browse (e.g., '/iplant/home/username/directory' or '/iplant/home/username/file.txt')"`
+	Path            string `json:"path" jsonschema:"Full iRODS path to browse (e.g., '/<zone>/home/username/directory' or '/<zone>/home/username/file.txt'); call whoami to learn your home directory path"`
 	Offset          int    `json:"offset,omitempty" jsonschema:"Byte offset for file reading (default: 0)"`
 	Limit           int    `json:"limit,omitempty" jsonschema:"Max bytes to read for files (optional)"`
 	IncludeMetadata bool   `json:"include_metadata,omitempty" jsonschema:"Include iRODS AVU metadata (default: false)"`
 }
 
 type createDirectoryInput struct {
-	Path     string            `json:"path" jsonschema:"Full iRODS path for the new directory (e.g., '/iplant/home/username/newdir')"`
+	Path     string            `json:"path" jsonschema:"Full iRODS path for the new directory (e.g., '/<zone>/home/username/newdir')"`
 	Metadata map[string]string `json:"metadata,omitempty" jsonschema:"Optional metadata as key-value pairs (e.g., {'author': 'username', 'project': 'myproject'})"`
 }
 
 type uploadFileInput struct {
-	Path     string            `json:"path" jsonschema:"Full iRODS path for the file (e.g., '/iplant/home/username/file.txt')"`
+	Path     string            `json:"path" jsonschema:"Full iRODS path for the file (e.g., '/<zone>/home/username/file.txt')"`
 	Content  string            `json:"content" jsonschema:"File content as a string"`
 	Metadata map[string]string `json:"metadata,omitempty" jsonschema:"Optional metadata as key-value pairs (e.g., {'author': 'username', 'filetype': 'text'})"`
 }
 
 type setMetadataInput struct {
-	Path     string            `json:"path" jsonschema:"Full iRODS path to file or directory (e.g., '/iplant/home/username/file.txt')"`
+	Path     string            `json:"path" jsonschema:"Full iRODS path to file or directory (e.g., '/<zone>/home/username/file.txt')"`
 	Metadata map[string]string `json:"metadata" jsonschema:"Metadata as key-value pairs (e.g., {'author': 'username', 'version': '1.0'})"`
 	Replace  bool              `json:"replace,omitempty" jsonschema:"If true, replace all existing metadata. If false, add to existing metadata (default: false)"`
 }

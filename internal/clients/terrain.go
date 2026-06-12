@@ -35,6 +35,12 @@ func NewTerrain(baseURL string) (*Terrain, error) {
 	}, nil
 }
 
+// Bootstrap returns the caller's session/orientation info (identity, home and
+// trash paths, default output folder) from terrain's aggregator endpoint.
+func (t *Terrain) Bootstrap(ctx context.Context, token string) (map[string]any, error) {
+	return getMap(ctx, t.client, endpoint(t.base, nil, "secured", "bootstrap"), token)
+}
+
 // GetApp fetches a single app's details, including its parameter groups.
 func (t *Terrain) GetApp(ctx context.Context, token, systemID, appID string) (map[string]any, error) {
 	return getMap(ctx, t.client, endpoint(t.base, nil, "apps", systemID, appID), token)

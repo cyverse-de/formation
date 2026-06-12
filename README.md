@@ -128,6 +128,7 @@ claude mcp add --transport http formation https://de.example.org/formation/mcp
 
 | Tool | Description |
 |------|-------------|
+| `whoami` | Report the caller's account info and data-store paths (home, trash, default output folder) from terrain's bootstrap |
 | `list_apps` | List available applications, optionally filtered by name |
 | `get_app_parameters` | Get an app's parameters, types, and defaults |
 | `launch_app_and_wait` | Launch an app; for VICE apps, wait for the URL to become ready. Reports missing required parameters instead of launching blind |
