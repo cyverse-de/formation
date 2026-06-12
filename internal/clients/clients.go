@@ -1,6 +1,6 @@
-// Package clients holds the HTTP clients for the DE backend services
-// formation fronts (apps and app-exposer). Responses are decoded into generic
-// maps and passed through so the original payload shapes survive the rewrite.
+// Package clients holds the HTTP client for terrain, the DE API gateway that
+// formation fronts. Responses are decoded into generic maps and passed through
+// so the original payload shapes survive the rewrite.
 package clients
 
 import (
@@ -25,9 +25,10 @@ func endpoint(base *url.URL, query url.Values, segments ...string) string {
 	return u.String()
 }
 
-// doJSON performs a request and returns the raw response body; non-2xx
-// responses become *apierror.UpstreamError like httpx raise_for_status.
-func doJSON(ctx context.Context, client *http.Client, method, rawurl string, body any) ([]byte, error) {
+// doJSON performs a request with the caller's bearer token and returns the raw
+// response body; non-2xx responses become *apierror.UpstreamError like httpx
+// raise_for_status.
+func doJSON(ctx context.Context, client *http.Client, method, rawurl, token string, body any) ([]byte, error) {
 	var reader io.Reader
 	if body != nil {
 		payload, err := json.Marshal(body)
@@ -43,6 +44,9 @@ func doJSON(ctx context.Context, client *http.Client, method, rawurl string, bod
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := client.Do(req)
@@ -62,8 +66,8 @@ func doJSON(ctx context.Context, client *http.Client, method, rawurl string, bod
 }
 
 // getMap performs a GET and decodes the JSON response into a map.
-func getMap(ctx context.Context, client *http.Client, rawurl string) (map[string]any, error) {
-	data, err := doJSON(ctx, client, http.MethodGet, rawurl, nil)
+func getMap(ctx context.Context, client *http.Client, rawurl, token string) (map[string]any, error) {
+	data, err := doJSON(ctx, client, http.MethodGet, rawurl, token, nil)
 	if err != nil {
 		return nil, err
 	}

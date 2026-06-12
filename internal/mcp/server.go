@@ -1,6 +1,6 @@
 // Package mcp hosts formation's Model Context Protocol server at /mcp,
-// re-exposing the apps, analyses, and data operations as MCP tools behind
-// the same Keycloak bearer-token auth as the REST endpoints.
+// exposing the apps, analyses, and data operations as MCP tools behind
+// Keycloak bearer-token auth.
 package mcp
 
 import (
@@ -19,7 +19,7 @@ import (
 // a variable so tests can shorten it.
 var launchPollInterval = 5 * time.Second
 
-// Deps carries the shared handlers and config the MCP tools delegate to.
+// Deps carries the shared operations and config the MCP tools delegate to.
 type Deps struct {
 	Apps *handlers.Apps
 	Data *handlers.Data

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/cyverse-de/formation/internal/datastore"
 	"github.com/cyverse-de/formation/internal/handlers"
 )
 
@@ -178,6 +177,16 @@ func formatInteractiveLaunch(analysisID string, status map[string]any, waitSecon
 	return b.String()
 }
 
+func formatLaunchPollFailure(analysisID string, err error) string {
+	var b strings.Builder
+	b.WriteString("Analysis launched successfully!\n\n")
+	fmt.Fprintf(&b, "**Analysis ID:** `%s`\n", analysisID)
+	b.WriteString("**Status:** unknown — status polling failed\n")
+	fmt.Fprintf(&b, "\nStatus check error: %s\n", err)
+	b.WriteString("Use get_analysis_status to check readiness.\n")
+	return b.String()
+}
+
 func formatBatchLaunch(analysisID, jobType string) string {
 	var b strings.Builder
 	b.WriteString("Analysis launched successfully!\n\n")
@@ -190,11 +199,11 @@ func formatBatchLaunch(analysisID, jobType string) string {
 
 func formatBrowse(result *handlers.BrowseResult) string {
 	var b strings.Builder
-	if result.Type == datastore.TypeCollection {
+	if result.Type == handlers.TypeCollection {
 		fmt.Fprintf(&b, "**Directory:** `%s`\n\n", result.Path)
-		var dirs, files []datastore.Entry
+		var dirs, files []handlers.Entry
 		for _, entry := range result.Entries {
-			if entry.Type == datastore.TypeCollection {
+			if entry.Type == handlers.TypeCollection {
 				dirs = append(dirs, entry)
 			} else {
 				files = append(files, entry)
@@ -233,10 +242,10 @@ func formatBrowse(result *handlers.BrowseResult) string {
 		b.WriteString("\n\n**Metadata:**\n")
 		for _, avu := range result.Metadata {
 			value := avu.Value
-			if avu.Units != "" {
-				value += "," + avu.Units
+			if avu.Unit != "" {
+				value += "," + avu.Unit
 			}
-			fmt.Fprintf(&b, "- %s: %s\n", avu.Attribute, value)
+			fmt.Fprintf(&b, "- %s: %s\n", avu.Attr, value)
 		}
 	}
 	return b.String()
@@ -244,7 +253,7 @@ func formatBrowse(result *handlers.BrowseResult) string {
 
 func formatDelete(result map[string]any, recurse bool) string {
 	path := strOr(result, "path", "")
-	isCollection := strOr(result, "type", "") == datastore.TypeCollection
+	isCollection := strOr(result, "type", "") == handlers.TypeCollection
 	itemCount := strOr(result, "item_count", "")
 
 	if dryRun, _ := result["dry_run"].(bool); dryRun {

@@ -17,9 +17,7 @@ import (
 // Defaults applied when a value is absent from both the environment and the JSON file.
 const (
 	DefaultConfigFile           = "config.json"
-	DefaultAppsBaseURL          = "http://apps"
-	DefaultAppExposerBaseURL    = "http://app-exposer"
-	DefaultPermissionsBaseURL   = "http://permissions"
+	DefaultTerrainBaseURL       = "http://terrain"
 	DefaultUserSuffix           = "@iplantcollaborative.org"
 	DefaultViceDomain           = ".cyverse.run"
 	DefaultPathPrefix           = "/formation"
@@ -33,25 +31,11 @@ const (
 
 // Config holds all formation settings.
 type Config struct {
-	IRODSHost     string
-	IRODSPort     string
-	IRODSUser     string
-	IRODSPassword string
-	IRODSZone     string
-	// IRODSCacheTTL bounds the iRODS client's metadata caches; zero (the
-	// default) disables caching so writes through one replica are immediately
-	// visible through the others.
-	IRODSCacheTTL time.Duration
+	KeycloakServerURL string
+	KeycloakRealm     string
+	KeycloakSSLVerify bool
 
-	KeycloakServerURL    string
-	KeycloakRealm        string
-	KeycloakClientID     string
-	KeycloakClientSecret string
-	KeycloakSSLVerify    bool
-
-	AppsBaseURL        string
-	AppExposerBaseURL  string
-	PermissionsBaseURL string
+	TerrainBaseURL string
 
 	UserSuffix string
 	ViceDomain string
@@ -61,17 +45,13 @@ type Config struct {
 	ViceURLCheckRetries  int
 	ViceURLCheckCacheTTL time.Duration
 
-	// OutputZone is where analysis outputs land; it always mirrors IRODSZone.
+	// OutputZone is the iRODS zone where analysis outputs land.
 	OutputZone string
-
-	ServiceAccountsOnly     bool
-	ServiceAccountUsernames map[string]string
 
 	// MCP server settings. PublicBaseURL is formation's externally visible
 	// base URL (e.g. https://de.cyverse.org/formation), used to build the
 	// OAuth resource identifier and discovery metadata. MCPClientID is the
 	// shared public Keycloak client returned by the registration shim.
-	MCPEnabled         bool
 	MCPClientID        string
 	PublicBaseURL      string
 	MCPScopes          string
@@ -95,25 +75,6 @@ func Load() (*Config, error) {
 
 	cfg := &Config{}
 
-	if cfg.IRODSHost, err = required("IRODS_HOST", irods, "host"); err != nil {
-		return nil, err
-	}
-	if cfg.IRODSPort, err = required("IRODS_PORT", irods, "port"); err != nil {
-		return nil, err
-	}
-	if cfg.IRODSUser, err = required("IRODS_USER", irods, "user"); err != nil {
-		return nil, err
-	}
-	if cfg.IRODSPassword, err = required("IRODS_PASSWORD", irods, "password"); err != nil {
-		return nil, err
-	}
-	if cfg.IRODSZone, err = required("IRODS_ZONE", irods, "zone"); err != nil {
-		return nil, err
-	}
-	if cfg.IRODSCacheTTL, err = duration("IRODS_CACHE_TTL", irods, "cache_ttl", 0); err != nil {
-		return nil, err
-	}
-
 	if cfg.KeycloakServerURL, err = required("KEYCLOAK_SERVER_URL", keycloak, "server_url"); err != nil {
 		return nil, err
 	}
@@ -123,17 +84,9 @@ func Load() (*Config, error) {
 	if cfg.KeycloakRealm, err = required("KEYCLOAK_REALM", keycloak, "realm"); err != nil {
 		return nil, err
 	}
-	if cfg.KeycloakClientID, err = required("KEYCLOAK_CLIENT_ID", keycloak, "client_id"); err != nil {
-		return nil, err
-	}
-	if cfg.KeycloakClientSecret, err = required("KEYCLOAK_CLIENT_SECRET", keycloak, "client_secret"); err != nil {
-		return nil, err
-	}
 	cfg.KeycloakSSLVerify = boolValue("KEYCLOAK_SSL_VERIFY", keycloak, "ssl_verify", true)
 
-	cfg.AppsBaseURL = optional("APPS_BASE_URL", services, "apps_base_url", DefaultAppsBaseURL)
-	cfg.AppExposerBaseURL = optional("APP_EXPOSER_BASE_URL", services, "app_exposer_base_url", DefaultAppExposerBaseURL)
-	cfg.PermissionsBaseURL = optional("PERMISSIONS_BASE_URL", services, "permissions_base_url", DefaultPermissionsBaseURL)
+	cfg.TerrainBaseURL = optional("TERRAIN_BASE_URL", services, "terrain_base_url", DefaultTerrainBaseURL)
 
 	cfg.UserSuffix = optional("USER_SUFFIX", app, "user_suffix", DefaultUserSuffix)
 	cfg.ViceDomain = optional("VICE_DOMAIN", app, "vice_domain", DefaultViceDomain)
@@ -156,29 +109,29 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	cfg.OutputZone = cfg.IRODSZone
-
-	cfg.ServiceAccountsOnly = boolValue("SERVICE_ACCOUNTS_ONLY", app, "service_accounts_only", false)
-
-	if cfg.ServiceAccountUsernames, err = usernameMap(app); err != nil {
-		return nil, err
+	// OUTPUT_ZONE replaces the old IRODS_ZONE-derived value; the IRODS_ZONE
+	// env var and irods.zone JSON key still work as fallbacks so existing
+	// deployments keep starting.
+	cfg.OutputZone = optional("OUTPUT_ZONE", app, "output_zone", "")
+	if cfg.OutputZone == "" {
+		cfg.OutputZone = optional("IRODS_ZONE", irods, "zone", "")
+	}
+	if cfg.OutputZone == "" {
+		return nil, fmt.Errorf("configuration value OUTPUT_ZONE is not set (not in environment or JSON config)")
 	}
 
-	cfg.MCPEnabled = boolValue("MCP_ENABLED", app, "mcp_enabled", true)
-	if cfg.MCPEnabled {
-		if cfg.MCPClientID, err = required("MCP_CLIENT_ID", keycloak, "mcp_client_id"); err != nil {
-			return nil, err
-		}
-		if cfg.PublicBaseURL, err = required("PUBLIC_BASE_URL", app, "public_base_url"); err != nil {
-			return nil, err
-		}
-		cfg.PublicBaseURL = strings.TrimSuffix(cfg.PublicBaseURL, "/")
-		// This URL is embedded in every OAuth discovery document; a malformed
-		// value (e.g. "https:host" without "//") breaks MCP clients with
-		// errors that point nowhere near the cause, so fail fast instead.
-		if err := validatePublicBaseURL(cfg.PublicBaseURL); err != nil {
-			return nil, err
-		}
+	if cfg.MCPClientID, err = required("MCP_CLIENT_ID", keycloak, "mcp_client_id"); err != nil {
+		return nil, err
+	}
+	if cfg.PublicBaseURL, err = required("PUBLIC_BASE_URL", app, "public_base_url"); err != nil {
+		return nil, err
+	}
+	cfg.PublicBaseURL = strings.TrimSuffix(cfg.PublicBaseURL, "/")
+	// This URL is embedded in every OAuth discovery document; a malformed
+	// value (e.g. "https:host" without "//") breaks MCP clients with
+	// errors that point nowhere near the cause, so fail fast instead.
+	if err := validatePublicBaseURL(cfg.PublicBaseURL); err != nil {
+		return nil, err
 	}
 	cfg.MCPScopes = optional("MCP_SCOPES", keycloak, "mcp_scopes", DefaultMCPScopes)
 	if cfg.MCPLaunchMaxWait, err = duration("MCP_LAUNCH_MAX_WAIT", app, "mcp_launch_max_wait", DefaultMCPLaunchMaxWait); err != nil {
@@ -326,20 +279,4 @@ func integer(envVar string, sec map[string]any, key string, fallback int) (int, 
 		return 0, fmt.Errorf("invalid value for %s: %q is not an integer", envVar, s)
 	}
 	return n, nil
-}
-
-func usernameMap(app map[string]any) (map[string]string, error) {
-	usernames := map[string]string{}
-	if v, ok := os.LookupEnv("SERVICE_ACCOUNT_USERNAMES"); ok {
-		if err := json.Unmarshal([]byte(v), &usernames); err != nil {
-			return nil, fmt.Errorf("invalid JSON in SERVICE_ACCOUNT_USERNAMES: %s: %w", v, err)
-		}
-		return usernames, nil
-	}
-	if m, ok := app["service_account_usernames"].(map[string]any); ok {
-		for role, name := range m {
-			usernames[role] = stringify(name)
-		}
-	}
-	return usernames, nil
 }

@@ -1,4 +1,5 @@
-// Package handlers contains formation's HTTP handlers.
+// Package handlers contains the terrain-backed operations shared by the MCP
+// tools, plus the landing page and path-prefix middleware.
 package handlers
 
 import (
@@ -17,15 +18,8 @@ import (
 var landingHTML string
 
 // Landing builds the unauthenticated landing page handler. The page explains
-// how to point MCP clients at /mcp and links to the Swagger UI; the Kubernetes
-// probes that hit "/" only check the status code, so HTML keeps them passing.
-//
-// @Summary Landing page
-// @Description Static page describing how to connect AI agents to the hosted MCP server, with a link to the Swagger UI.
-// @Tags Status
-// @Produce html
-// @Success 200 {string} string "HTML landing page"
-// @Router / [get]
+// how to point MCP clients at /mcp; the Kubernetes probes that hit "/" only
+// check the status code, so HTML keeps them passing.
 func Landing(cfg *config.Config, mcpTools []string) (echo.HandlerFunc, error) {
 	tmpl, err := template.New("landing").Parse(landingHTML)
 	if err != nil {
@@ -37,10 +31,9 @@ func Landing(cfg *config.Config, mcpTools []string) (echo.HandlerFunc, error) {
 	}
 	var page bytes.Buffer
 	err = tmpl.Execute(&page, struct {
-		MCPEnabled      bool
-		MCPURL, DocsURL string
-		Tools           []string
-	}{cfg.MCPEnabled, base + "/mcp", base + "/docs", mcpTools})
+		MCPURL string
+		Tools  []string
+	}{base + "/mcp", mcpTools})
 	if err != nil {
 		return nil, err
 	}

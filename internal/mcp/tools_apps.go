@@ -94,7 +94,7 @@ func (s *server) registerAppsTools(srv *sdk.Server) {
 }
 
 func (s *server) listApps(ctx context.Context, req *sdk.CallToolRequest, in listAppsInput) (*sdk.CallToolResult, error) {
-	_, username, err := s.appsUsername(req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,7 @@ func (s *server) listApps(ctx context.Context, req *sdk.CallToolRequest, in list
 	}
 	offset := max(in.Offset, 0)
 
-	result, err := s.apps.ListAppsPage(ctx, username, in.Name, limit, offset)
+	result, err := s.apps.ListAppsPage(ctx, caller, in.Name, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (s *server) listApps(ctx context.Context, req *sdk.CallToolRequest, in list
 }
 
 func (s *server) launchAppAndWait(ctx context.Context, req *sdk.CallToolRequest, in launchAppInput) (*sdk.CallToolResult, error) {
-	info, username, err := s.appsUsername(req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func (s *server) launchAppAndWait(ctx context.Context, req *sdk.CallToolRequest,
 	// for missing required values before launching anything.
 	jobType := in.OverallJobType
 	if jobType == "" {
-		parameters, err := s.apps.AppParameters(ctx, username, systemID, in.AppID)
+		parameters, err := s.apps.AppParameters(ctx, caller, systemID, in.AppID)
 		if err != nil {
 			return nil, err
 		}
@@ -153,7 +153,7 @@ func (s *server) launchAppAndWait(ctx context.Context, req *sdk.CallToolRequest,
 		submission["config"] = in.Config
 	}
 
-	launched, err := s.apps.LaunchAnalysis(ctx, info, systemID, in.AppID, s.cfg.OutputZone, submission)
+	launched, err := s.apps.LaunchAnalysis(ctx, caller, systemID, in.AppID, s.cfg.OutputZone, submission)
 	if err != nil {
 		return nil, err
 	}
@@ -170,9 +170,12 @@ func (s *server) launchAppAndWait(ctx context.Context, req *sdk.CallToolRequest,
 	// Poll the analysis status until the VICE URL responds or maxWait passes.
 	start := time.Now()
 	for time.Since(start) < maxWait {
-		status, err := s.apps.AnalysisStatus(ctx, username, analysisID)
+		status, err := s.apps.AnalysisStatus(ctx, caller, analysisID)
 		if err != nil {
-			return nil, err
+			// The analysis is already launched; a failed status poll (e.g.
+			// the caller's token expiring mid-wait) must not read as a
+			// launch failure.
+			return textResult(formatLaunchPollFailure(analysisID, err)), nil
 		}
 		if ready, _ := status["url_ready"].(bool); ready {
 			return textResult(formatInteractiveLaunch(analysisID, status, int(time.Since(start).Seconds()))), nil
@@ -211,11 +214,11 @@ func notifyProgress(ctx context.Context, req *sdk.CallToolRequest, message strin
 }
 
 func (s *server) getAnalysisStatus(ctx context.Context, req *sdk.CallToolRequest, in analysisStatusInput) (*sdk.CallToolResult, error) {
-	_, username, err := s.appsUsername(req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
-	status, err := s.apps.AnalysisStatus(ctx, username, in.AnalysisID)
+	status, err := s.apps.AnalysisStatus(ctx, caller, in.AnalysisID)
 	if err != nil {
 		return nil, err
 	}
@@ -223,11 +226,11 @@ func (s *server) getAnalysisStatus(ctx context.Context, req *sdk.CallToolRequest
 }
 
 func (s *server) listRunningAnalyses(ctx context.Context, req *sdk.CallToolRequest, _ listRunningInput) (*sdk.CallToolResult, error) {
-	_, username, err := s.appsUsername(req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
-	analyses, err := s.apps.AnalysesForUser(ctx, username, "Running")
+	analyses, err := s.apps.AnalysesForUser(ctx, caller, "Running")
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +238,7 @@ func (s *server) listRunningAnalyses(ctx context.Context, req *sdk.CallToolReque
 }
 
 func (s *server) getAppParameters(ctx context.Context, req *sdk.CallToolRequest, in appParametersInput) (*sdk.CallToolResult, error) {
-	_, username, err := s.appsUsername(req)
+	caller, err := requestCaller(req)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +246,7 @@ func (s *server) getAppParameters(ctx context.Context, req *sdk.CallToolRequest,
 	if systemID == "" {
 		systemID = "de"
 	}
-	parameters, err := s.apps.AppParameters(ctx, username, systemID, in.AppID)
+	parameters, err := s.apps.AppParameters(ctx, caller, systemID, in.AppID)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +254,8 @@ func (s *server) getAppParameters(ctx context.Context, req *sdk.CallToolRequest,
 }
 
 func (s *server) stopAnalysis(ctx context.Context, req *sdk.CallToolRequest, in stopAnalysisInput) (*sdk.CallToolResult, error) {
-	if _, _, err := s.appsUsername(req); err != nil {
+	caller, err := requestCaller(req)
+	if err != nil {
 		return nil, err
 	}
 
@@ -263,7 +267,7 @@ func (s *server) stopAnalysis(ctx context.Context, req *sdk.CallToolRequest, in 
 		saveMsg = "with"
 	}
 
-	if _, err := s.apps.ControlAnalysis(ctx, in.AnalysisID, operation); err != nil {
+	if _, err := s.apps.ControlAnalysis(ctx, caller, in.AnalysisID, operation); err != nil {
 		return nil, err
 	}
 	return textResult(fmt.Sprintf("Analysis stopped %s saving outputs", saveMsg)), nil

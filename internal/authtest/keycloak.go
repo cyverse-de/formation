@@ -1,6 +1,5 @@
 // Package authtest provides a fake Keycloak server for tests: OIDC discovery,
-// a JWKS endpoint backed by a generated RSA key, token signing, and a
-// configurable password-grant token endpoint.
+// a JWKS endpoint backed by a generated RSA key, and token signing.
 package authtest
 
 import (
@@ -20,13 +19,11 @@ import (
 
 const keyID = "test-key"
 
-// Keycloak is a fake Keycloak instance. TokenHandler, when set, serves the
-// password-grant token endpoint.
+// Keycloak is a fake Keycloak instance.
 type Keycloak struct {
-	Server       *httptest.Server
-	Key          *rsa.PrivateKey
-	Realm        string
-	TokenHandler http.HandlerFunc
+	Server *httptest.Server
+	Key    *rsa.PrivateKey
+	Realm  string
 }
 
 // New starts a fake Keycloak for the realm; it is shut down via t.Cleanup.
@@ -60,14 +57,6 @@ func New(t *testing.T, realm string) *Keycloak {
 			}},
 		})
 	})
-	mux.HandleFunc("/realms/"+realm+"/protocol/openid-connect/token", func(w http.ResponseWriter, r *http.Request) {
-		if k.TokenHandler != nil {
-			k.TokenHandler(w, r)
-			return
-		}
-		http.Error(w, "no token handler configured", http.StatusInternalServerError)
-	})
-
 	k.Server = httptest.NewServer(mux)
 	t.Cleanup(k.Server.Close)
 	return k

@@ -8,10 +8,11 @@ import (
 	"time"
 )
 
-// minimalJSON satisfies every required value via the JSON file.
+// minimalJSON satisfies every required value via the JSON file, using the
+// legacy irods.zone key to exercise the OutputZone fallback.
 const minimalJSON = `{
-	"irods": {"host": "irods.example.org", "port": 1247, "user": "rods", "password": "secret", "zone": "tempZone"},
-	"keycloak": {"server_url": "https://kc.example.org/auth", "realm": "de", "client_id": "formation", "client_secret": "kcsecret"}
+	"irods": {"zone": "tempZone"},
+	"keycloak": {"server_url": "https://kc.example.org/auth", "realm": "de"}
 }`
 
 func writeConfig(t *testing.T, contents string) {
@@ -27,12 +28,11 @@ func writeConfig(t *testing.T, contents string) {
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, v := range []string{
-		"IRODS_HOST", "IRODS_PORT", "IRODS_USER", "IRODS_PASSWORD", "IRODS_ZONE",
-		"KEYCLOAK_SERVER_URL", "KEYCLOAK_REALM", "KEYCLOAK_CLIENT_ID", "KEYCLOAK_CLIENT_SECRET",
-		"KEYCLOAK_SSL_VERIFY", "APPS_BASE_URL", "APP_EXPOSER_BASE_URL", "PERMISSIONS_BASE_URL",
+		"OUTPUT_ZONE", "IRODS_ZONE",
+		"KEYCLOAK_SERVER_URL", "KEYCLOAK_REALM", "KEYCLOAK_SSL_VERIFY", "TERRAIN_BASE_URL",
 		"USER_SUFFIX", "VICE_DOMAIN", "PATH_PREFIX", "VICE_URL_CHECK_TIMEOUT",
-		"VICE_URL_CHECK_RETRIES", "VICE_URL_CHECK_CACHE_TTL", "SERVICE_ACCOUNTS_ONLY",
-		"SERVICE_ACCOUNT_USERNAMES", "MCP_ENABLED", "MCP_CLIENT_ID", "PUBLIC_BASE_URL",
+		"VICE_URL_CHECK_RETRIES", "VICE_URL_CHECK_CACHE_TTL",
+		"MCP_CLIENT_ID", "PUBLIC_BASE_URL",
 		"MCP_SCOPES", "MCP_LAUNCH_MAX_WAIT", "MCP_BROWSE_BYTE_LIMIT",
 	} {
 		t.Setenv(v, "")
@@ -52,11 +52,8 @@ func TestLoad(t *testing.T) {
 			name: "defaults applied with minimal config",
 			json: minimalJSON,
 			check: func(t *testing.T, cfg *Config) {
-				if cfg.AppsBaseURL != DefaultAppsBaseURL {
-					t.Errorf("AppsBaseURL = %q, want %q", cfg.AppsBaseURL, DefaultAppsBaseURL)
-				}
-				if cfg.AppExposerBaseURL != DefaultAppExposerBaseURL {
-					t.Errorf("AppExposerBaseURL = %q, want %q", cfg.AppExposerBaseURL, DefaultAppExposerBaseURL)
+				if cfg.TerrainBaseURL != DefaultTerrainBaseURL {
+					t.Errorf("TerrainBaseURL = %q, want %q", cfg.TerrainBaseURL, DefaultTerrainBaseURL)
 				}
 				if cfg.UserSuffix != DefaultUserSuffix {
 					t.Errorf("UserSuffix = %q, want %q", cfg.UserSuffix, DefaultUserSuffix)
@@ -76,42 +73,36 @@ func TestLoad(t *testing.T) {
 				if !cfg.KeycloakSSLVerify {
 					t.Error("KeycloakSSLVerify = false, want true by default")
 				}
-				if cfg.ServiceAccountsOnly {
-					t.Error("ServiceAccountsOnly = true, want false by default")
-				}
-				if len(cfg.ServiceAccountUsernames) != 0 {
-					t.Errorf("ServiceAccountUsernames = %v, want empty", cfg.ServiceAccountUsernames)
-				}
 			},
 		},
 		{
-			name: "numeric port stringified and output zone mirrors irods zone",
+			name: "output zone falls back to the legacy irods zone key",
 			json: minimalJSON,
 			check: func(t *testing.T, cfg *Config) {
-				if cfg.IRODSPort != "1247" {
-					t.Errorf("IRODSPort = %q, want \"1247\"", cfg.IRODSPort)
-				}
 				if cfg.OutputZone != "tempZone" {
 					t.Errorf("OutputZone = %q, want \"tempZone\"", cfg.OutputZone)
 				}
 			},
 		},
 		{
-			name: "irods cache ttl defaults to disabled and loads from env",
+			name: "output zone from env wins over the irods fallback",
 			json: minimalJSON,
-			env:  map[string]string{"IRODS_CACHE_TTL": "30"},
+			env:  map[string]string{"OUTPUT_ZONE": "otherZone"},
 			check: func(t *testing.T, cfg *Config) {
-				if cfg.IRODSCacheTTL != 30*time.Second {
-					t.Errorf("IRODSCacheTTL = %v, want 30s", cfg.IRODSCacheTTL)
+				if cfg.OutputZone != "otherZone" {
+					t.Errorf("OutputZone = %q, want \"otherZone\"", cfg.OutputZone)
 				}
 			},
 		},
 		{
-			name: "irods cache ttl zero by default",
-			json: minimalJSON,
+			name: "output zone from the application section",
+			json: `{
+				"keycloak": {"server_url": "https://kc/", "realm": "de"},
+				"application": {"output_zone": "appZone"}
+			}`,
 			check: func(t *testing.T, cfg *Config) {
-				if cfg.IRODSCacheTTL != 0 {
-					t.Errorf("IRODSCacheTTL = %v, want 0 (caching disabled)", cfg.IRODSCacheTTL)
+				if cfg.OutputZone != "appZone" {
+					t.Errorf("OutputZone = %q, want \"appZone\"", cfg.OutputZone)
 				}
 			},
 		},
@@ -128,16 +119,12 @@ func TestLoad(t *testing.T) {
 			name: "env overrides JSON",
 			json: minimalJSON,
 			env: map[string]string{
-				"IRODS_HOST":    "env-host",
-				"APPS_BASE_URL": "http://apps-from-env",
-				"USER_SUFFIX":   "@example.org",
+				"TERRAIN_BASE_URL": "http://terrain-from-env",
+				"USER_SUFFIX":      "@example.org",
 			},
 			check: func(t *testing.T, cfg *Config) {
-				if cfg.IRODSHost != "env-host" {
-					t.Errorf("IRODSHost = %q, want env-host", cfg.IRODSHost)
-				}
-				if cfg.AppsBaseURL != "http://apps-from-env" {
-					t.Errorf("AppsBaseURL = %q, want env value", cfg.AppsBaseURL)
+				if cfg.TerrainBaseURL != "http://terrain-from-env" {
+					t.Errorf("TerrainBaseURL = %q, want env value", cfg.TerrainBaseURL)
 				}
 				if cfg.UserSuffix != "@example.org" {
 					t.Errorf("UserSuffix = %q, want env value", cfg.UserSuffix)
@@ -147,29 +134,26 @@ func TestLoad(t *testing.T) {
 		{
 			name: "empty env var falls through to JSON",
 			json: `{
-				"irods": {"host": "json-host", "port": "1247", "user": "rods", "password": "secret", "zone": "tempZone"},
-				"keycloak": {"server_url": "https://kc/", "realm": "de", "client_id": "f", "client_secret": "s"},
-				"services": {"apps_base_url": "http://apps-from-json"}
+				"irods": {"zone": "tempZone"},
+				"keycloak": {"server_url": "https://kc/", "realm": "de"},
+				"services": {"terrain_base_url": "http://terrain-from-json"}
 			}`,
-			env: map[string]string{"IRODS_HOST": "", "APPS_BASE_URL": ""},
+			env: map[string]string{"TERRAIN_BASE_URL": ""},
 			check: func(t *testing.T, cfg *Config) {
-				if cfg.IRODSHost != "json-host" {
-					t.Errorf("IRODSHost = %q, want json-host", cfg.IRODSHost)
-				}
-				if cfg.AppsBaseURL != "http://apps-from-json" {
-					t.Errorf("AppsBaseURL = %q, want json value", cfg.AppsBaseURL)
+				if cfg.TerrainBaseURL != "http://terrain-from-json" {
+					t.Errorf("TerrainBaseURL = %q, want json value", cfg.TerrainBaseURL)
 				}
 			},
 		},
 		{
 			name:    "missing required value errors",
-			json:    `{"irods": {"host": "h", "port": "1247", "user": "u", "password": "p", "zone": "z"}}`,
+			json:    `{"irods": {"zone": "z"}}`,
 			wantErr: "KEYCLOAK_SERVER_URL",
 		},
 		{
-			name:    "missing irods value errors",
-			json:    `{}`,
-			wantErr: "IRODS_HOST",
+			name:    "missing output zone errors",
+			json:    `{"keycloak": {"server_url": "https://kc/", "realm": "de"}}`,
+			wantErr: "OUTPUT_ZONE",
 		},
 		{
 			name: "ssl_verify env set-at-all semantics",
@@ -184,8 +168,8 @@ func TestLoad(t *testing.T) {
 		{
 			name: "ssl_verify false in JSON",
 			json: strings.Replace(minimalJSON,
-				`"client_secret": "kcsecret"`,
-				`"client_secret": "kcsecret", "ssl_verify": false`, 1),
+				`"realm": "de"`,
+				`"realm": "de", "ssl_verify": false`, 1),
 			check: func(t *testing.T, cfg *Config) {
 				if cfg.KeycloakSSLVerify {
 					t.Error("KeycloakSSLVerify = true, want false from JSON")
@@ -196,7 +180,7 @@ func TestLoad(t *testing.T) {
 			name: "vice url check settings from JSON",
 			json: `{
 				"irods": {"host": "h", "port": "1", "user": "u", "password": "p", "zone": "z"},
-				"keycloak": {"server_url": "https://kc/", "realm": "r", "client_id": "c", "client_secret": "s"},
+				"keycloak": {"server_url": "https://kc/", "realm": "r"},
 				"application": {"vice_url_check_timeout": 2.5, "vice_url_check_retries": 7, "vice_url_check_cache_ttl": 10}
 			}`,
 			check: func(t *testing.T, cfg *Config) {
@@ -218,35 +202,6 @@ func TestLoad(t *testing.T) {
 			wantErr: "VICE_URL_CHECK_TIMEOUT",
 		},
 		{
-			name: "service account usernames from JSON",
-			json: strings.Replace(minimalJSON, `"keycloak"`,
-				`"application": {"service_account_usernames": {"app-runner": "de-service-account"}, "service_accounts_only": true}, "keycloak"`, 1),
-			check: func(t *testing.T, cfg *Config) {
-				if cfg.ServiceAccountUsernames["app-runner"] != "de-service-account" {
-					t.Errorf("ServiceAccountUsernames = %v", cfg.ServiceAccountUsernames)
-				}
-				if !cfg.ServiceAccountsOnly {
-					t.Error("ServiceAccountsOnly = false, want true")
-				}
-			},
-		},
-		{
-			name: "service account usernames env overrides JSON",
-			json: minimalJSON,
-			env:  map[string]string{"SERVICE_ACCOUNT_USERNAMES": `{"app-runner": "from-env"}`},
-			check: func(t *testing.T, cfg *Config) {
-				if cfg.ServiceAccountUsernames["app-runner"] != "from-env" {
-					t.Errorf("ServiceAccountUsernames = %v", cfg.ServiceAccountUsernames)
-				}
-			},
-		},
-		{
-			name:    "invalid service account usernames JSON errors",
-			json:    minimalJSON,
-			env:     map[string]string{"SERVICE_ACCOUNT_USERNAMES": "{not json"},
-			wantErr: "SERVICE_ACCOUNT_USERNAMES",
-		},
-		{
 			name:    "malformed config file errors",
 			json:    "{not json",
 			wantErr: "error parsing JSON config file",
@@ -256,9 +211,6 @@ func TestLoad(t *testing.T) {
 			json: minimalJSON,
 			env:  map[string]string{"PUBLIC_BASE_URL": "https://de.example.org/formation/"},
 			check: func(t *testing.T, cfg *Config) {
-				if !cfg.MCPEnabled {
-					t.Error("MCPEnabled = false, want true by default")
-				}
 				if cfg.PublicBaseURL != "https://de.example.org/formation" {
 					t.Errorf("PublicBaseURL = %q, want trailing slash trimmed", cfg.PublicBaseURL)
 				}
@@ -274,23 +226,16 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
-			name: "mcp disabled skips required mcp values",
-			json: minimalJSON,
-			env:  map[string]string{"MCP_ENABLED": "false", "MCP_CLIENT_ID": "", "PUBLIC_BASE_URL": ""},
-			check: func(t *testing.T, cfg *Config) {
-				if cfg.MCPEnabled {
-					t.Error("MCPEnabled = true, want false")
-				}
-				if cfg.MCPClientID != "" || cfg.PublicBaseURL != "" {
-					t.Errorf("MCP values should stay empty when disabled, got %q %q", cfg.MCPClientID, cfg.PublicBaseURL)
-				}
-			},
-		},
-		{
-			name:    "missing mcp client id errors when enabled",
+			name:    "missing mcp client id errors",
 			json:    minimalJSON,
 			env:     map[string]string{"MCP_CLIENT_ID": ""},
 			wantErr: "MCP_CLIENT_ID",
+		},
+		{
+			name:    "missing public base url errors",
+			json:    minimalJSON,
+			env:     map[string]string{"PUBLIC_BASE_URL": ""},
+			wantErr: "PUBLIC_BASE_URL",
 		},
 		{
 			// "https:host" parses as scheme+opaque with no host; it must be rejected.
@@ -307,8 +252,8 @@ func TestLoad(t *testing.T) {
 		},
 		{
 			name: "mcp settings from JSON",
-			json: strings.Replace(minimalJSON, `"client_secret": "kcsecret"`,
-				`"client_secret": "kcsecret", "mcp_client_id": "json-mcp-client", "mcp_scopes": "openid"`, 1),
+			json: strings.Replace(minimalJSON, `"realm": "de"`,
+				`"realm": "de", "mcp_client_id": "json-mcp-client", "mcp_scopes": "openid"`, 1),
 			env: map[string]string{"MCP_CLIENT_ID": ""},
 			check: func(t *testing.T, cfg *Config) {
 				if cfg.MCPClientID != "json-mcp-client" {
@@ -351,10 +296,8 @@ func TestLoadMissingFileUsesEnvOnly(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("CONFIG_FILE", filepath.Join(t.TempDir(), "does-not-exist.json"))
 	for k, v := range map[string]string{
-		"IRODS_HOST": "h", "IRODS_PORT": "1247", "IRODS_USER": "u",
-		"IRODS_PASSWORD": "p", "IRODS_ZONE": "z",
+		"OUTPUT_ZONE":         "z",
 		"KEYCLOAK_SERVER_URL": "https://kc/", "KEYCLOAK_REALM": "r",
-		"KEYCLOAK_CLIENT_ID": "c", "KEYCLOAK_CLIENT_SECRET": "s",
 		"MCP_CLIENT_ID": "m", "PUBLIC_BASE_URL": "https://de.example.org/formation",
 	} {
 		t.Setenv(k, v)
@@ -364,7 +307,7 @@ func TestLoadMissingFileUsesEnvOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.IRODSHost != "h" || cfg.KeycloakRealm != "r" {
+	if cfg.OutputZone != "z" || cfg.KeycloakRealm != "r" {
 		t.Errorf("unexpected config: %+v", cfg)
 	}
 }

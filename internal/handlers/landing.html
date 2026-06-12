@@ -102,17 +102,6 @@
     font-size: 0.78rem;
     padding: 0.25rem 0.75rem;
   }
-  .docs-card {
-    display: block;
-    background: var(--panel);
-    border: 1px solid var(--panel-edge);
-    border-radius: 6px;
-    padding: 1rem 1.1rem;
-    text-decoration: none;
-  }
-  .docs-card:hover { border-color: var(--accent-dim); }
-  .docs-card strong { color: var(--accent); font-family: ui-monospace, Menlo, Consolas, monospace; }
-  .docs-card span { display: block; color: var(--muted); font-size: 0.92rem; margin-top: 0.2rem; }
   footer {
     border-top: 1px solid var(--panel-edge);
     padding-top: 1.5rem;
@@ -143,7 +132,6 @@
     CyVerse Data Store.</p>
   </header>
 
-  {{if .MCPEnabled}}
   <section>
     <h2>MCP Server</h2>
     <p>Formation hosts a <a href="https://modelcontextprotocol.io">Model Context Protocol</a>
@@ -189,15 +177,6 @@
       {{range .Tools}}<li class="chip">{{.}}</li>
       {{end}}
     </ul>
-  </section>
-  {{end}}
-
-  <section>
-    <h2>REST API</h2>
-    <a class="docs-card" href="{{.DocsURL}}">
-      <strong>{{.DocsURL}}</strong>
-      <span>Interactive Swagger UI — browse every endpoint and try requests in place.</span>
-    </a>
   </section>
 
   <footer>

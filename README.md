@@ -1,27 +1,20 @@
 # Formation
 
-Formation is a Go service that provides authenticated access to CyVerse Discovery Environment apps and iRODS data storage with integrated Keycloak authentication. It serves as a bridge between web applications and the DE backend services, offering RESTful APIs for app discovery and launching, analysis management, file browsing, content retrieval, and metadata access.
+Formation is the CyVerse Discovery Environment's hosted [Model Context Protocol](https://modelcontextprotocol.io/) server. It exposes app discovery and launching, analysis management, and iRODS data access as MCP tools at `/mcp`, with OAuth 2.1 (PKCE) login via Keycloak. All backend operations go through the [terrain](https://github.com/cyverse-de/terrain) API gateway, forwarding each caller's Keycloak token so terrain enforces authorization.
 
 ## Features
 
-- **Authentication**: Secure login via Keycloak OIDC with JWT token support
-- **Service Account Support**: Service-to-service authentication with enforced role-based access control (requires "app-runner" role)
-- **Interactive Apps**: List and filter VICE (Visual Interactive Computing Environment) applications accessible to authenticated users
-- **App Launching**: Submit analyses and control running VICE analyses (extend time, save and exit, exit)
-- **File System Access**: Browse iRODS collections and stream file contents
-- **Metadata Support**: Access and set iRODS AVU (Attribute-Value-Unit) metadata as HTTP headers
-- **Content Type Detection**: Automatic MIME type detection for file responses
-- **Pagination**: Support for offset/limit parameters when reading large files and listing apps
-- **Permission Checking**: Validates user read/write permissions before granting access
-- **Advanced Filtering**: Filter apps by name, description, integrator, job type, and date ranges
-- **MCP Server**: Hosted Model Context Protocol server at `/mcp` with OAuth 2.1 (PKCE) login via Keycloak (see [MCP Server](#mcp-server))
+- **MCP Server**: Streamable HTTP transport at `/mcp`, stateless so any replica can serve any request (see [MCP Server](#mcp-server))
+- **OAuth 2.1 Login**: Authorization code flow with PKCE against the existing Keycloak realm, with standard MCP discovery and a dynamic client registration shim
+- **Interactive Apps**: List VICE (Visual Interactive Computing Environment) applications, launch them, and wait for the URL to become ready
+- **Analysis Management**: Check status, list running analyses, and stop analyses with or without saving outputs
+- **Data Store Access**: Browse iRODS collections, read and upload files, create directories, manage AVU metadata, and delete paths with dry-run support
 
 ## Requirements
 
 - Go 1.25+
-- iRODS server access
 - Keycloak server for authentication
-- apps and app-exposer services
+- terrain service (the DE API gateway; it talks to apps, app-exposer, and the data store)
 
 ### Development Requirements
 
@@ -47,90 +40,60 @@ Formation is configured via a JSON configuration file. Copy `config.example.json
 cp config.example.json config.json
 ```
 
-The config file path defaults to `config.json` in the working directory and can be overridden with the `CONFIG_FILE` environment variable. Every setting can also be overridden by an environment variable (e.g. `IRODS_HOST`, `KEYCLOAK_SERVER_URL`, `APPS_BASE_URL`); environment variables take precedence over the config file.
+The config file path defaults to `config.json` in the working directory and can be overridden with the `CONFIG_FILE` environment variable. Every setting can also be overridden by an environment variable (e.g. `KEYCLOAK_SERVER_URL`, `TERRAIN_BASE_URL`, `OUTPUT_ZONE`); environment variables take precedence over the config file.
 
 ### Configuration File Structure
 
 ```json
 {
-  "irods": {
-    "host": "irods.example.com",
-    "port": "1247",
-    "user": "rods",
-    "password": "changeme",
-    "zone": "iplant",
-    "cache_ttl": 0
-  },
   "keycloak": {
     "server_url": "https://keycloak.example.com",
     "realm": "cyverse",
-    "client_id": "formation",
-    "client_secret": "changeme",
     "mcp_client_id": "formation-mcp",
     "mcp_scopes": "openid profile email",
     "ssl_verify": true
   },
   "services": {
-    "apps_base_url": "http://apps:8080",
-    "app_exposer_base_url": "http://app-exposer:8080",
-    "permissions_base_url": "http://permissions:8080"
+    "terrain_base_url": "http://terrain"
   },
   "application": {
+    "output_zone": "iplant",
     "user_suffix": "@iplantcollaborative.org",
     "vice_domain": ".cyverse.run",
     "path_prefix": "/formation",
     "public_base_url": "https://de.example.org/formation",
-    "mcp_enabled": true,
     "mcp_launch_max_wait": 540,
     "mcp_browse_byte_limit": 1048576,
     "vice_url_check_timeout": 5.0,
     "vice_url_check_retries": 3,
-    "vice_url_check_cache_ttl": 5.0,
-    "service_accounts_only": false,
-    "service_account_usernames": {
-      "app-runner": "de-service-account"
-    }
+    "vice_url_check_cache_ttl": 5.0
   }
 }
 ```
 
 ### Configuration Sections
 
-**irods**: iRODS server connection settings
-- `host`: iRODS server hostname
-- `port`: iRODS server port
-- `user`: iRODS username for service account
-- `password`: iRODS password
-- `zone`: iRODS zone name
-- `cache_ttl`: iRODS client metadata cache lifetime in seconds (default: 0, caching disabled). Leave disabled when running more than one replica — a cached (or cached-negative) entry on one replica hides writes made through another until it expires (env: `IRODS_CACHE_TTL`)
-
 **keycloak**: Keycloak authentication settings
-- `server_url`: Keycloak server URL
-- `realm`: Keycloak realm name
-- `client_id`: OAuth2 client ID
-- `client_secret`: OAuth2 client secret
-- `mcp_client_id`: Public (no-secret) Keycloak client shared by all MCP users; required when the MCP server is enabled (env: `MCP_CLIENT_ID`)
+- `server_url`: Keycloak server URL (required)
+- `realm`: Keycloak realm name (required)
+- `mcp_client_id`: Public (no-secret) Keycloak client shared by all MCP users (required, env: `MCP_CLIENT_ID`)
 - `mcp_scopes`: Space-separated scopes advertised in the MCP OAuth metadata (default: `openid profile email`, env: `MCP_SCOPES`)
 - `ssl_verify`: Enable SSL verification (default: true)
 
 **services**: Backend service URLs
-- `apps_base_url`: Base URL of apps service
-- `app_exposer_base_url`: Base URL of app-exposer service
-- `permissions_base_url`: Base URL of permissions service (parsed for compatibility; unused)
+- `terrain_base_url`: Base URL of the terrain API gateway (default: `http://terrain`, env: `TERRAIN_BASE_URL`)
 
 **application**: Application behavior settings
+- `output_zone`: iRODS zone used when generating analysis output directories (required; env: `OUTPUT_ZONE`; the legacy `irods.zone` JSON key still works as a fallback)
 - `user_suffix`: Username suffix to strip from integrator usernames
 - `vice_domain`: Domain suffix for VICE applications
-- `path_prefix`: URL path prefix stripped from incoming requests when present (the gateway forwards paths like `/formation/apps` unrewritten); all routes also serve at `/`
-- `public_base_url`: Formation's externally visible base URL including the path prefix (e.g. `https://de.cyverse.org/formation`); required when the MCP server is enabled and used to build the OAuth resource identifier and discovery documents (env: `PUBLIC_BASE_URL`)
-- `mcp_enabled`: Mount the MCP server at `/mcp` (default: true, env: `MCP_ENABLED`)
+- `path_prefix`: URL path prefix stripped from incoming requests when present (the gateway forwards paths like `/formation/mcp` unrewritten); all routes also serve at `/`
+- `public_base_url`: Formation's externally visible base URL including the path prefix (e.g. `https://de.cyverse.org/formation`); used to build the OAuth resource identifier and discovery documents (required, env: `PUBLIC_BASE_URL`)
 - `mcp_launch_max_wait`: Hard cap in seconds on `launch_app_and_wait`'s `max_wait` (default: 540); keep it below the gateway's idle timeout
 - `mcp_browse_byte_limit`: Maximum bytes the `browse_data` tool reads from a file (default: 1048576)
 - `vice_url_check_timeout`: Timeout for VICE URL checks in seconds
 - `vice_url_check_retries`: Number of retries for VICE URL checks
 - `vice_url_check_cache_ttl`: Cache TTL for VICE URL check results in seconds
-- `service_accounts_only`: When true, disables regular user authentication and only accepts service account authentication (useful for testing)
-- `service_account_usernames`: Map of service account role names to usernames used when calling backend services
 
 ## Usage
 
@@ -144,14 +107,9 @@ go run ./cmd/formation
 go run ./cmd/formation --listen-port 8080 --log-level debug
 ```
 
-### API Endpoints
-
-See [API Endpoints Documentation](docs/API_ENDPOINTS.md) for detailed endpoint documentation including:
-- Authentication (login, service accounts)
-- Applications (`/apps`, `/app/launch`)
-- Analyses (`/apps/analyses`)
-- File System Operations (`/data`)
-- Response formats
+Besides `/mcp` and its OAuth discovery routes, the server exposes only an HTML landing page
+at `/` (with MCP client setup instructions); Kubernetes probes hit `/` and rely on the status
+code.
 
 ## MCP Server
 
@@ -214,9 +172,10 @@ Create a public client in the realm (suggested id `formation-mcp`):
    logs every redirect URI clients ask for, to help maintain this list.
 4. **Web origins:** `+` (or explicit origins).
 
-Authorization at `/mcp` mirrors the REST API: any valid realm token is accepted, the
-apps/analysis tools require the `app-runner` realm role for service accounts, and the data
-tools act as the token's user.
+Authorization at `/mcp` accepts any valid realm **user** token; every tool acts as the
+token's user, and the user's own token is forwarded to terrain. Service-account tokens are
+rejected with a 401 — without a real user behind them there is no data-store identity to act
+as.
 
 ## Development
 
@@ -250,26 +209,10 @@ go test -run TestLaunch ./internal/handlers/
 
 ## History
 
-Formation was originally implemented in Python with FastAPI and rewritten in Go as a drop-in replacement: the REST API, response shapes, and configuration are unchanged. Intentional behavior improvements over the Python version:
+Formation was originally a Python/FastAPI REST API for app launching and data access, rewritten in Go as a drop-in replacement, then retargeted from calling the apps/app-exposer services and iRODS directly to fronting the terrain API gateway: each caller's bearer token is forwarded so the DE services enforce authorization, and formation holds no rodsadmin credentials. Consequences of the terrain retargeting that remain visible through the MCP tools:
 
-- `GET /data` streams file contents instead of buffering whole files in memory.
-- `PUT /data` with `replace_metadata=true` replaces only the AVU attributes being set, preserving unrelated AVUs (including system attributes such as `ipc_UUID`).
-- `DELETE /data` dry runs report the same error a real delete would for non-empty directories without `recurse=true`.
-- `GET /apps` uses real upstream pagination, so results are no longer truncated at 1000 apps when filtering.
+- A submission's `email` field is stripped instead of forwarded; the notification email always comes from the token's claims.
+- Metadata reads exclude system AVUs (attributes starting with `ipc`), and writes to them are rejected with "Access denied" — enforced by data-info behind terrain, not by formation itself.
+- Deletions move items to the DE trash instead of permanently removing them.
 
-Small mechanical differences from FastAPI: malformed query parameters return `400` with a `{"detail": ...}` body instead of pydantic's `422` validation arrays, an invalid date filter returns `400` instead of an unhandled `500`, and `GET /apps/analyses` (without the trailing slash) is served directly instead of being redirected. `GET /` serves an HTML landing page (MCP client setup instructions plus a Swagger UI link) instead of the JSON string `"Hello from formation."`; health checks should use `/` rather than `/docs` and rely on the status code, not the body.
-
-## Documentation
-
-- [API Endpoints](docs/API_ENDPOINTS.md) - Complete API endpoint reference
-- [Date Filtering](docs/DATE_FILTERING.md) - Date filter syntax and usage examples
-
-## API Documentation
-
-Interactive Swagger UI is available at `/docs` when the server is running (e.g. `http://localhost:8000/docs`). To authenticate in the UI: open the Authorize dialog, fill in the BasicAuth username/password, execute `POST /login`, then paste the returned `access_token` into the BearerAuth value as `Bearer <token>`.
-
-The OpenAPI spec is generated from [swaggo/swag](https://github.com/swaggo/swag) annotations on the handlers into the committed `apidocs` package. After changing annotations, regenerate with:
-
-```bash
-go run github.com/swaggo/swag/cmd/swag@latest init -g cmd/formation/main.go -o apidocs --outputTypes go,json
-```
+The REST API was removed once its last consumer (portal-conductor) moved to calling terrain directly; the MCP server is now formation's sole interface. With it went `/login`, `/user`, `/apps*`, `/app/launch/*`, `/data/*`, the Swagger UI at `/docs`, and service-account authentication (Keycloak token-exchange impersonation is no longer used or required). `GET /` remains as an HTML landing page and the health-check target — probes should rely on the status code, not the body.

@@ -4,19 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/cyverse-de/formation/internal/apierror"
+	"github.com/cyverse-de/formation/internal/terraintest"
 )
 
 // recordedRequest captures what the client sent upstream.
 type recordedRequest struct {
-	Method string
-	Path   string
-	Query  map[string]string
-	Body   map[string]any
+	Method        string
+	Path          string
+	Query         map[string]string
+	Body          map[string]any
+	Authorization string
 }
 
 // stub serves canned JSON and records the last request.
@@ -30,6 +33,7 @@ func stub(t *testing.T, status int, response any) (*httptest.Server, *recordedRe
 		for k, v := range r.URL.Query() {
 			rec.Query[k] = v[0]
 		}
+		rec.Authorization = r.Header.Get("Authorization")
 		if r.Body != nil {
 			_ = json.NewDecoder(r.Body).Decode(&rec.Body)
 		}
@@ -43,83 +47,144 @@ func stub(t *testing.T, status int, response any) (*httptest.Server, *recordedRe
 	return server, rec
 }
 
-func TestAppsClientRequests(t *testing.T) {
+const testToken = "test-token"
+
+func TestTerrainClientRequests(t *testing.T) {
 	okBody := map[string]any{"ok": true}
 
 	tests := []struct {
 		name      string
-		call      func(a *Apps) (map[string]any, error)
+		call      func(c *Terrain) (map[string]any, error)
+		method    string
 		wantPath  string
 		wantQuery map[string]string
 		wantBody  map[string]any
-		method    string
+		response  any
+		want      map[string]any
 	}{
 		{
 			name: "GetApp",
-			call: func(a *Apps) (map[string]any, error) {
-				return a.GetApp(context.Background(), "de", "app-uuid", "alice")
+			call: func(c *Terrain) (map[string]any, error) {
+				return c.GetApp(context.Background(), testToken, "de", "app-uuid")
 			},
 			method:    http.MethodGet,
 			wantPath:  "/apps/de/app-uuid",
-			wantQuery: map[string]string{"user": "alice"},
-		},
-		{
-			name: "SubmitAnalysis",
-			call: func(a *Apps) (map[string]any, error) {
-				return a.SubmitAnalysis(context.Background(),
-					map[string]any{"name": "run-1"}, "alice", "alice@example.org")
-			},
-			method:    http.MethodPost,
-			wantPath:  "/analyses",
-			wantQuery: map[string]string{"user": "alice", "email": "alice@example.org"},
-			wantBody:  map[string]any{"name": "run-1"},
+			wantQuery: map[string]string{},
 		},
 		{
 			name: "ListApps with search",
-			call: func(a *Apps) (map[string]any, error) {
-				return a.ListApps(context.Background(), "alice", 100, 20, "jupyter")
+			call: func(c *Terrain) (map[string]any, error) {
+				return c.ListApps(context.Background(), testToken, 100, 20, "jupyter")
 			},
 			method:    http.MethodGet,
 			wantPath:  "/apps",
-			wantQuery: map[string]string{"user": "alice", "limit": "100", "offset": "20", "search": "jupyter"},
+			wantQuery: map[string]string{"limit": "100", "offset": "20", "search": "jupyter"},
+		},
+		{
+			name: "SubmitAnalysis",
+			call: func(c *Terrain) (map[string]any, error) {
+				return c.SubmitAnalysis(context.Background(), testToken, map[string]any{"name": "run-1"})
+			},
+			method:    http.MethodPost,
+			wantPath:  "/analyses",
+			wantQuery: map[string]string{},
+			wantBody:  map[string]any{"name": "run-1"},
 		},
 		{
 			name: "ListAnalyses with status filter",
-			call: func(a *Apps) (map[string]any, error) {
-				return a.ListAnalyses(context.Background(), "alice", "Running")
+			call: func(c *Terrain) (map[string]any, error) {
+				return c.ListAnalyses(context.Background(), testToken, "Running")
 			},
 			method:    http.MethodGet,
 			wantPath:  "/analyses",
-			wantQuery: map[string]string{"user": "alice", "filter": `[{"field":"status","value":"Running"}]`},
+			wantQuery: map[string]string{"filter": `[{"field":"status","value":"Running"}]`},
 		},
 		{
 			name: "ListAnalyses without status omits filter",
-			call: func(a *Apps) (map[string]any, error) {
-				return a.ListAnalyses(context.Background(), "alice", "")
+			call: func(c *Terrain) (map[string]any, error) {
+				return c.ListAnalyses(context.Background(), testToken, "")
 			},
 			method:    http.MethodGet,
 			wantPath:  "/analyses",
-			wantQuery: map[string]string{"user": "alice"},
+			wantQuery: map[string]string{},
+		},
+		{
+			name: "ExtendTimeLimit",
+			call: func(c *Terrain) (map[string]any, error) {
+				return c.ExtendTimeLimit(context.Background(), testToken, "an-1")
+			},
+			method:    http.MethodPost,
+			wantPath:  "/analyses/an-1/time-limit",
+			wantQuery: map[string]string{},
+			response:  map[string]any{"time_limit": "1749600000"},
+			want:      map[string]any{"time_limit": "1749600000"},
+		},
+		{
+			name: "SaveAndExit stops via terrain and synthesizes status",
+			call: func(c *Terrain) (map[string]any, error) {
+				return c.SaveAndExit(context.Background(), testToken, "an-1")
+			},
+			method:    http.MethodPost,
+			wantPath:  "/analyses/an-1/stop",
+			wantQuery: map[string]string{},
+			response:  map[string]any{"id": "an-1"},
+			want:      map[string]any{"status": "terminated", "outputs_saved": true},
+		},
+		{
+			name: "ExitWithoutSave synthesizes status",
+			call: func(c *Terrain) (map[string]any, error) {
+				return c.ExitWithoutSave(context.Background(), testToken, "an-1")
+			},
+			method:    http.MethodPost,
+			wantPath:  "/vice/analyses/an-1/exit",
+			wantQuery: map[string]string{},
+			want:      map[string]any{"status": "terminated", "outputs_saved": false},
+		},
+		{
+			name: "GetExternalID",
+			call: func(c *Terrain) (map[string]any, error) {
+				return c.GetExternalID(context.Background(), testToken, "an-1")
+			},
+			method:    http.MethodGet,
+			wantPath:  "/vice/analyses/an-1/external-id",
+			wantQuery: map[string]string{},
+			response:  map[string]any{"externalID": "ext-1"},
+			want:      map[string]any{"externalID": "ext-1"},
+		},
+		{
+			name: "GetAsyncData",
+			call: func(c *Terrain) (map[string]any, error) {
+				return c.GetAsyncData(context.Background(), testToken, "ext-1")
+			},
+			method:    http.MethodGet,
+			wantPath:  "/vice/async-data",
+			wantQuery: map[string]string{"external-id": "ext-1"},
+			response:  map[string]any{"subdomain": "a1b2c3"},
+			want:      map[string]any{"subdomain": "a1b2c3"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server, rec := stub(t, http.StatusOK, okBody)
-			apps, err := NewApps(server.URL)
+			response := tt.response
+			if response == nil && tt.want == nil {
+				response = okBody
+			}
+			server, rec := stub(t, http.StatusOK, response)
+			terrain, err := NewTerrain(server.URL)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			result, err := tt.call(apps)
+			result, err := tt.call(terrain)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result["ok"] != true {
-				t.Errorf("result = %v", result)
-			}
 			if rec.Method != tt.method || rec.Path != tt.wantPath {
 				t.Errorf("request = %s %s, want %s %s", rec.Method, rec.Path, tt.method, tt.wantPath)
+			}
+			if rec.Authorization != "Bearer "+testToken {
+				t.Errorf("Authorization = %q, want the bearer token", rec.Authorization)
 			}
 			for k, want := range tt.wantQuery {
 				if got := rec.Query[k]; got != want {
@@ -136,6 +201,13 @@ func TestAppsClientRequests(t *testing.T) {
 					t.Errorf("body = %s, want %s", got, want)
 				}
 			}
+			if tt.want != nil {
+				want, _ := json.Marshal(tt.want)
+				got, _ := json.Marshal(result)
+				if string(want) != string(got) {
+					t.Errorf("result = %s, want %s", got, want)
+				}
+			}
 		})
 	}
 }
@@ -145,9 +217,9 @@ func TestGetAnalysis(t *testing.T) {
 		server, rec := stub(t, http.StatusOK, map[string]any{
 			"analyses": []any{map[string]any{"id": "an-1", "status": "Running"}},
 		})
-		apps, _ := NewApps(server.URL)
+		terrain, _ := NewTerrain(server.URL)
 
-		analysis, err := apps.GetAnalysis(context.Background(), "an-1", "alice")
+		analysis, err := terrain.GetAnalysis(context.Background(), testToken, "an-1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -161,9 +233,9 @@ func TestGetAnalysis(t *testing.T) {
 
 	t.Run("empty listing becomes 404 upstream error", func(t *testing.T) {
 		server, _ := stub(t, http.StatusOK, map[string]any{"analyses": []any{}})
-		apps, _ := NewApps(server.URL)
+		terrain, _ := NewTerrain(server.URL)
 
-		_, err := apps.GetAnalysis(context.Background(), "an-1", "alice")
+		_, err := terrain.GetAnalysis(context.Background(), testToken, "an-1")
 		var upstream *apierror.UpstreamError
 		if !errors.As(err, &upstream) || upstream.Status != http.StatusNotFound {
 			t.Fatalf("err = %v, want 404 UpstreamError", err)
@@ -173,9 +245,9 @@ func TestGetAnalysis(t *testing.T) {
 
 func TestNon2xxBecomesUpstreamError(t *testing.T) {
 	server, _ := stub(t, http.StatusBadRequest, map[string]any{"reason": "nope"})
-	apps, _ := NewApps(server.URL)
+	terrain, _ := NewTerrain(server.URL)
 
-	_, err := apps.GetApp(context.Background(), "de", "app-uuid", "alice")
+	_, err := terrain.GetApp(context.Background(), testToken, "de", "app-uuid")
 	var upstream *apierror.UpstreamError
 	if !errors.As(err, &upstream) {
 		t.Fatalf("err = %v, want UpstreamError", err)
@@ -185,92 +257,36 @@ func TestNon2xxBecomesUpstreamError(t *testing.T) {
 	}
 }
 
-func TestAppExposerRequests(t *testing.T) {
-	tests := []struct {
-		name      string
-		call      func(a *AppExposer) (map[string]any, error)
-		method    string
-		wantPath  string
-		wantQuery map[string]string
-		response  any
-		want      map[string]any
-	}{
-		{
-			name: "ExtendTimeLimit",
-			call: func(a *AppExposer) (map[string]any, error) {
-				return a.ExtendTimeLimit(context.Background(), "an-1")
-			},
-			method:   http.MethodPost,
-			wantPath: "/vice/admin/analyses/an-1/time-limit",
-			response: map[string]any{"time_limit": "2026-06-10T00:00:00Z"},
-			want:     map[string]any{"time_limit": "2026-06-10T00:00:00Z"},
-		},
-		{
-			name: "SaveAndExit synthesizes status",
-			call: func(a *AppExposer) (map[string]any, error) {
-				return a.SaveAndExit(context.Background(), "an-1")
-			},
-			method:   http.MethodPost,
-			wantPath: "/vice/admin/analyses/an-1/save-and-exit",
-			want:     map[string]any{"status": "terminated", "outputs_saved": true},
-		},
-		{
-			name: "ExitWithoutSave synthesizes status",
-			call: func(a *AppExposer) (map[string]any, error) {
-				return a.ExitWithoutSave(context.Background(), "an-1")
-			},
-			method:   http.MethodPost,
-			wantPath: "/vice/admin/analyses/an-1/exit",
-			want:     map[string]any{"status": "terminated", "outputs_saved": false},
-		},
-		{
-			name: "GetExternalID",
-			call: func(a *AppExposer) (map[string]any, error) {
-				return a.GetExternalID(context.Background(), "an-1")
-			},
-			method:   http.MethodGet,
-			wantPath: "/vice/admin/analyses/an-1/external-id",
-			response: map[string]any{"externalID": "ext-1"},
-			want:     map[string]any{"externalID": "ext-1"},
-		},
-		{
-			name: "GetAsyncData",
-			call: func(a *AppExposer) (map[string]any, error) {
-				return a.GetAsyncData(context.Background(), "ext-1")
-			},
-			method:    http.MethodGet,
-			wantPath:  "/vice/async-data",
-			wantQuery: map[string]string{"external-id": "ext-1"},
-			response:  map[string]any{"subdomain": "a1b2c3"},
-			want:      map[string]any{"subdomain": "a1b2c3"},
-		},
+func TestListDirectoryPaging(t *testing.T) {
+	fake := terraintest.NewData()
+	entries := make([]terraintest.DataEntry, 0, 2500)
+	for i := range 2500 {
+		entries = append(entries, terraintest.DataEntry{Name: fmt.Sprintf("entry-%04d", i), Dir: i%5 == 0})
+	}
+	fake.Dirs["/iplant/big"] = entries
+
+	server := terraintest.New(t, fake.Respond)
+	terrain, err := NewTerrain(server.URL())
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server, rec := stub(t, http.StatusOK, tt.response)
-			exposer, err := NewAppExposer(server.URL)
-			if err != nil {
-				t.Fatal(err)
-			}
+	// A zero size hint forces page-sized requests, so 2500 entries take three.
+	folders, files, err := terrain.ListDirectory(context.Background(), testToken, "/iplant/big", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 500 || len(files) != 2000 {
+		t.Errorf("got %d folders and %d files, want 500 and 2000", len(folders), len(files))
+	}
 
-			result, err := tt.call(exposer)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if rec.Method != tt.method || rec.Path != tt.wantPath {
-				t.Errorf("request = %s %s, want %s %s", rec.Method, rec.Path, tt.method, tt.wantPath)
-			}
-			for k, want := range tt.wantQuery {
-				if got := rec.Query[k]; got != want {
-					t.Errorf("query[%s] = %q, want %q", k, got, want)
-				}
-			}
-			want, _ := json.Marshal(tt.want)
-			got, _ := json.Marshal(result)
-			if string(want) != string(got) {
-				t.Errorf("result = %s, want %s", got, want)
-			}
-		})
+	var listingCalls int
+	for _, call := range server.Calls() {
+		if call.Path == "/secured/filesystem/paged-directory" {
+			listingCalls++
+		}
+	}
+	if listingCalls != 3 {
+		t.Errorf("listing requests = %d, want 3", listingCalls)
 	}
 }
