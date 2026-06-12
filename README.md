@@ -212,7 +212,7 @@ go test -run TestLaunch ./internal/handlers/
 Formation was originally a Python/FastAPI REST API for app launching and data access, rewritten in Go as a drop-in replacement, then retargeted from calling the apps/app-exposer services and iRODS directly to fronting the terrain API gateway: each caller's bearer token is forwarded so the DE services enforce authorization, and formation holds no rodsadmin credentials. Consequences of the terrain retargeting that remain visible through the MCP tools:
 
 - A submission's `email` field is stripped instead of forwarded; the notification email always comes from the token's claims.
-- Metadata reads exclude system AVUs (attributes starting with `ipc`), and writes to them are rejected.
+- Metadata reads exclude system AVUs (attributes starting with `ipc`), and writes to them are rejected with "Access denied" — enforced by data-info behind terrain, not by formation itself.
 - Deletions move items to the DE trash instead of permanently removing them.
 
 The REST API was removed once its last consumer (portal-conductor) moved to calling terrain directly; the MCP server is now formation's sole interface. With it went `/login`, `/user`, `/apps*`, `/app/launch/*`, `/data/*`, the Swagger UI at `/docs`, and service-account authentication (Keycloak token-exchange impersonation is no longer used or required). `GET /` remains as an HTML landing page and the health-check target — probes should rely on the status code, not the body.

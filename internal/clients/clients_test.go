@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/cyverse-de/formation/internal/apierror"
+	"github.com/cyverse-de/formation/internal/terraintest"
 )
 
 // recordedRequest captures what the client sent upstream.
@@ -252,5 +254,39 @@ func TestNon2xxBecomesUpstreamError(t *testing.T) {
 	}
 	if upstream.Status != http.StatusBadRequest || upstream.Body != "{\"reason\":\"nope\"}\n" {
 		t.Errorf("upstream = %+v", upstream)
+	}
+}
+
+func TestListDirectoryPaging(t *testing.T) {
+	fake := terraintest.NewData()
+	entries := make([]terraintest.DataEntry, 0, 2500)
+	for i := range 2500 {
+		entries = append(entries, terraintest.DataEntry{Name: fmt.Sprintf("entry-%04d", i), Dir: i%5 == 0})
+	}
+	fake.Dirs["/iplant/big"] = entries
+
+	server := terraintest.New(t, fake.Respond)
+	terrain, err := NewTerrain(server.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A zero size hint forces page-sized requests, so 2500 entries take three.
+	folders, files, err := terrain.ListDirectory(context.Background(), testToken, "/iplant/big", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 500 || len(files) != 2000 {
+		t.Errorf("got %d folders and %d files, want 500 and 2000", len(folders), len(files))
+	}
+
+	var listingCalls int
+	for _, call := range server.Calls() {
+		if call.Path == "/secured/filesystem/paged-directory" {
+			listingCalls++
+		}
+	}
+	if listingCalls != 3 {
+		t.Errorf("listing requests = %d, want 3", listingCalls)
 	}
 }

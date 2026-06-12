@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	gopath "path"
+	"strconv"
 	"strings"
 )
 
@@ -216,13 +217,26 @@ func (d *Data) stat(r *http.Request) (int, any) {
 }
 
 func (d *Data) listDirectory(r *http.Request) (int, any) {
-	p := r.URL.Query().Get("path")
+	query := r.URL.Query()
+	p := query.Get("path")
 	if status, errBody := d.check(p); status != 0 {
 		return status, errBody
 	}
 
+	entries := d.Dirs[p]
+	total := len(entries)
+	// Honor limit/offset like terrain's paged listing so the client's paging
+	// loop is exercised; limit <= 0 returns everything.
+	offset, _ := strconv.Atoi(query.Get("offset"))
+	limit, _ := strconv.Atoi(query.Get("limit"))
+	offset = min(max(offset, 0), total)
+	end := total
+	if limit > 0 {
+		end = min(offset+limit, total)
+	}
+
 	var folders, files []map[string]any
-	for _, entry := range d.Dirs[p] {
+	for _, entry := range entries[offset:end] {
 		item := map[string]any{"label": entry.Name, "path": gopath.Join(p, entry.Name)}
 		if entry.Dir {
 			folders = append(folders, item)
@@ -232,7 +246,7 @@ func (d *Data) listDirectory(r *http.Request) (int, any) {
 	}
 	return http.StatusOK, map[string]any{
 		"path":    p,
-		"total":   len(folders) + len(files),
+		"total":   total,
 		"folders": folders,
 		"files":   files,
 	}

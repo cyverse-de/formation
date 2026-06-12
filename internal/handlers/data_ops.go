@@ -376,7 +376,9 @@ func (h *Data) MakeDirectory(ctx context.Context, token, irodsPath string, metad
 }
 
 // DeletePath deletes a file or collection, with dry-run and recurse options.
-// The dry run reports the same error a real delete would.
+// The dry run reports the same errors a real delete would, except ownership:
+// stat cannot distinguish a write grant from ownership, so a write-but-not-own
+// caller passes the dry run while the real delete is denied (ERR_NOT_OWNER).
 func (h *Data) DeletePath(ctx context.Context, token, irodsPath string, recurse, dryRun bool) (map[string]any, error) {
 	st, err := h.statPath(ctx, token, irodsPath)
 	if err != nil {
