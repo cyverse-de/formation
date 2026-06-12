@@ -84,6 +84,8 @@ func TestBrowse(t *testing.T) {
 			{"limit below maxBytes wins", "0123456789", 0, 3, 4, "012", true, 3},
 			{"rune split at the window edge is deferred", "aédef", 0, 2, 1024, "a", true, 1},
 			{"deferred rune is delivered whole on the next page", "aédef", 1, 2, 1024, "é", true, 3},
+			{"limit narrower than the next rune delivers it whole", "日本語", 0, 2, 1024, "日", true, 3},
+			{"offset inside a character advances by one byte", "日本語", 7, 2, 1024, "", true, 8},
 		}
 
 		for _, tt := range tests {
@@ -111,8 +113,8 @@ func TestBrowse(t *testing.T) {
 				if result.FileSize != int64(len(tt.content)) {
 					t.Errorf("fileSize = %d, want %d", result.FileSize, len(tt.content))
 				}
-				if result.NextOffset() != tt.wantNextOffset {
-					t.Errorf("nextOffset = %d, want %d", result.NextOffset(), tt.wantNextOffset)
+				if result.NextOffset != tt.wantNextOffset {
+					t.Errorf("nextOffset = %d, want %d", result.NextOffset, tt.wantNextOffset)
 				}
 			})
 		}
@@ -125,6 +127,11 @@ func TestBrowse(t *testing.T) {
 		}{
 			{"NUL byte", []byte{0xff, 0xfe, 0x00, 0x01}},
 			{"NUL-free invalid bytes", []byte{0xff, 0xfe, 0xff, 0xfe, 'A'}},
+			// One substituted byte breaks paging's byte arithmetic, so even
+			// mostly-text content is refused rather than silently skipped.
+			{"single substituted byte", []byte{'a', 0xff, 'b', 'c'}},
+			// A literal U+FFFD is indistinguishable from a substitution.
+			{"literal replacement character", []byte("ok�")},
 		}
 
 		for _, tt := range tests {

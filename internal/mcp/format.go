@@ -261,7 +261,7 @@ func formatBrowse(result *handlers.BrowseResult) string {
 		fmt.Fprintf(&b, "**File Content:**\n\n```\n%s\n```", result.Content)
 		if result.Truncated {
 			fmt.Fprintf(&b, "\n\n*(showing bytes %d–%d of %d; continue with offset=%d — each read adds the returned bytes to the conversation)*",
-				result.Offset, result.NextOffset(), result.FileSize, result.NextOffset())
+				result.Offset, result.NextOffset, result.FileSize, result.NextOffset)
 		}
 	}
 

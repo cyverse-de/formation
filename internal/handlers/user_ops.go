@@ -46,25 +46,27 @@ func (h *User) Info(ctx context.Context, token string, claims *auth.Claims) (*Us
 		return nil, err
 	}
 
-	homePath := fmt.Sprintf("/%s/home/%s", h.zone, username)
-	if _, err := h.statPath(ctx, token, homePath); err != nil {
-		return nil, err
-	}
-
 	info := &UserInfo{
 		Username:     username,
 		FullUsername: username + h.userSuffix,
 		Name:         claims.DisplayName(),
 		Email:        claims.EmailAddress(),
-		HomePath:     homePath,
 		TrashPath:    fmt.Sprintf("/%s/trash/home/%s", h.zone, username),
 	}
 
 	// Preferences are auxiliary: a user-prefs outage shouldn't break whoami,
-	// so a failed lookup just omits the default output folder.
+	// so a failed lookup just omits the default output folder. This runs
+	// before the home stat because terrain creates the default output dir
+	// (and with it a brand-new user's home tree) while serving preferences.
 	if prefs, err := h.terrain.GetPreferences(ctx, token); err == nil {
 		info.DefaultOutputFolder = mapString(subMap(prefs, "default_output_folder"), "path")
 	}
+
+	homePath := fmt.Sprintf("/%s/home/%s", h.zone, username)
+	if _, err := h.statPath(ctx, token, homePath); err != nil {
+		return nil, err
+	}
+	info.HomePath = homePath
 	return info, nil
 }
 

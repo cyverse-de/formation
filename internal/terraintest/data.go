@@ -289,23 +289,42 @@ func (d *Data) readChunk(r *http.Request) (int, any) {
 }
 
 // trimSplitRunes mimics data-info's string decoding at the window edges:
-// leading continuation bytes and a trailing incomplete rune are dropped.
-// Interior invalid bytes are left alone — the JSON encoding replaces them
-// with U+FFFD, like data-info's decoder does.
+// leading continuation bytes and a trailing incomplete (but otherwise valid)
+// rune are dropped. Standalone invalid bytes are left alone — the JSON
+// encoding replaces them with U+FFFD, like data-info's decoder does — and a
+// complete literal U+FFFD character is kept intact.
 func trimSplitRunes(window []byte) []byte {
 	for len(window) > 0 && !utf8.RuneStart(window[0]) {
 		window = window[1:]
 	}
-	for range utf8.UTFMax - 1 {
-		if len(window) == 0 {
-			break
+	for i := 1; i < utf8.UTFMax && i <= len(window); i++ {
+		lead := window[len(window)-i]
+		if !utf8.RuneStart(lead) {
+			continue
 		}
-		if r, _ := utf8.DecodeLastRune(window); r != utf8.RuneError {
-			break
+		if runeLenFromLead(lead) > i {
+			window = window[:len(window)-i]
 		}
-		window = window[:len(window)-1]
+		break
 	}
 	return window
+}
+
+// runeLenFromLead returns the UTF-8 sequence length a lead byte announces,
+// or 1 for bytes that cannot start a rune.
+func runeLenFromLead(lead byte) int {
+	switch {
+	case lead < 0x80:
+		return 1
+	case lead&0xE0 == 0xC0:
+		return 2
+	case lead&0xF0 == 0xE0:
+		return 3
+	case lead&0xF8 == 0xF0:
+		return 4
+	default:
+		return 1
+	}
 }
 
 // filePart reads the multipart "file" part's contents and filename.
