@@ -134,19 +134,31 @@ func (t *Terrain) doStream(req *http.Request, token string) (*http.Response, err
 	return resp, nil
 }
 
-// DownloadFile streams a file's raw contents; the caller must close the reader.
-func (t *Terrain) DownloadFile(ctx context.Context, token, path string) (io.ReadCloser, error) {
-	query := url.Values{"path": {path}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		endpoint(t.base, query, "secured", "fileio", "download"), nil)
+// ReadChunk reads up to size bytes of a file starting at the byte offset
+// position, using terrain's random-access read-chunk endpoint (a direct iRODS
+// seek, not a download from the start). It also returns the file's total size,
+// which the caller uses to tell whether more data follows the returned window.
+func (t *Terrain) ReadChunk(ctx context.Context, token, path string, position, size int) (content []byte, fileSize int64, err error) {
+	data, err := doJSON(ctx, t.client, http.MethodPost,
+		endpoint(t.base, nil, "secured", "filesystem", "read-chunk"), token,
+		map[string]any{"path": path, "position": position, "chunk-size": size})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	resp, err := t.doStream(req, token)
+
+	// data-info returns the byte count fields as strings.
+	var resp struct {
+		Chunk    string `json:"chunk"`
+		FileSize string `json:"file-size"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, 0, fmt.Errorf("decoding read-chunk response for %s: %w", path, err)
+	}
+	fileSize, err = strconv.ParseInt(resp.FileSize, 10, 64)
 	if err != nil {
-		return nil, err
+		return nil, 0, fmt.Errorf("parsing file-size from read-chunk response for %s: %w", path, err)
 	}
-	return resp.Body, nil
+	return []byte(resp.Chunk), fileSize, nil
 }
 
 // UploadFile creates a new file named filename in the destination directory.

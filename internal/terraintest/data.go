@@ -32,8 +32,8 @@ type DataEntry struct {
 // Data is an in-memory fake of terrain's filesystem and fileio endpoints,
 // mimicking the data-info behaviors formation depends on (as observed against
 // QA): ERR_DOES_NOT_EXIST as a 500, stat omitting unreadable paths from a 200
-// response, paged listings, binary download/upload/overwrite, directory
-// creation, full-listing metadata set, and recursive (trash) deletion.
+// response, paged listings, random-access chunk reads, upload/overwrite,
+// directory creation, full-listing metadata set, and recursive (trash) deletion.
 type Data struct {
 	Files map[string][]byte
 	Dirs  map[string][]DataEntry
@@ -137,8 +137,8 @@ func (d *Data) Respond(r *http.Request) (int, any) {
 		return d.stat(r)
 	case r.Method == http.MethodGet && p == "/secured/filesystem/paged-directory":
 		return d.listDirectory(r)
-	case r.Method == http.MethodGet && p == "/secured/fileio/download":
-		return d.download(r)
+	case r.Method == http.MethodPost && p == "/secured/filesystem/read-chunk":
+		return d.readChunk(r)
 	case r.Method == http.MethodPost && p == "/secured/fileio/upload":
 		return d.upload(r)
 	case r.Method == http.MethodPost && p == "/secured/fileio/overwrite":
@@ -252,16 +252,36 @@ func (d *Data) listDirectory(r *http.Request) (int, any) {
 	}
 }
 
-func (d *Data) download(r *http.Request) (int, any) {
-	p := r.URL.Query().Get("path")
-	if status, errBody := d.check(p); status != 0 {
+// readChunk serves terrain's random-access read-chunk endpoint, returning the
+// data-info chunk record (the requested byte window plus the total file size).
+func (d *Data) readChunk(r *http.Request) (int, any) {
+	var body struct {
+		Path      string `json:"path"`
+		Position  int    `json:"position"`
+		ChunkSize int    `json:"chunk-size"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if status, errBody := d.check(body.Path); status != 0 {
 		return status, errBody
 	}
-	content, ok := d.Files[p]
+	content, ok := d.Files[body.Path]
 	if !ok {
 		return http.StatusBadRequest, errorBody("ERR_NOT_A_FILE")
 	}
-	return http.StatusOK, content
+
+	start := min(max(body.Position, 0), len(content))
+	end := len(content)
+	if body.ChunkSize > 0 {
+		end = min(start+body.ChunkSize, len(content))
+	}
+	return http.StatusOK, map[string]any{
+		"path":       body.Path,
+		"user":       "fake",
+		"start":      strconv.Itoa(start),
+		"chunk-size": strconv.Itoa(body.ChunkSize),
+		"file-size":  strconv.Itoa(len(content)),
+		"chunk":      string(content[start:end]),
+	}
 }
 
 // filePart reads the multipart "file" part's contents and filename.
