@@ -153,22 +153,6 @@ func (h *Data) listEntries(ctx context.Context, token, irodsPath string, childre
 	return entries, nil
 }
 
-// openRange opens the file stream and discards offset bytes, emulating the
-// previous seek-based partial reads (terrain's download has no range support).
-func (h *Data) openRange(ctx context.Context, token, irodsPath string, offset int) (io.ReadCloser, error) {
-	reader, err := h.terrain.DownloadFile(ctx, token, irodsPath)
-	if err != nil {
-		return nil, mapDataError(err, irodsPath, "Path")
-	}
-	if offset > 0 {
-		if _, err := io.CopyN(io.Discard, reader, int64(offset)); err != nil && err != io.EOF {
-			_ = reader.Close()
-			return nil, err
-		}
-	}
-	return reader, nil
-}
-
 // pathMetadata returns the data item's iRODS AVUs.
 func (h *Data) pathMetadata(ctx context.Context, token, dataID string) ([]clients.MetadataAVU, error) {
 	avus, _, err := h.terrain.GetMetadata(ctx, token, dataID)
@@ -232,26 +216,22 @@ func (h *Data) Browse(ctx context.Context, token, irodsPath string, offset, limi
 		result.Entries = entries
 	} else {
 		result.Type = TypeDataObject
-		reader, err := h.openRange(ctx, token, irodsPath, offset)
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = reader.Close() }()
-
 		readLimit := maxBytes
 		if limit > 0 && limit < readLimit {
 			readLimit = limit
 		}
-		// Read one extra byte to detect truncation without slurping the rest.
-		content, err := io.ReadAll(io.LimitReader(reader, int64(readLimit)+1))
+		content, fileSize, err := h.terrain.ReadChunk(ctx, token, irodsPath, offset, readLimit)
 		if err != nil {
-			return nil, err
+			return nil, mapDataError(err, irodsPath, "Path")
 		}
+		// data-info caps the read at readLimit, but a chunk of non-UTF-8 bytes
+		// can expand when JSON-encoded; keep the response within maxBytes.
 		if len(content) > readLimit {
 			content = content[:readLimit]
-			result.Truncated = true
 		}
 		result.Content = content
+		// More bytes follow when the file extends past the requested window.
+		result.Truncated = int64(offset)+int64(readLimit) < fileSize
 	}
 
 	// Metadata lookup errors are swallowed so an outage doesn't break reads.

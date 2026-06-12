@@ -257,6 +257,40 @@ func TestNon2xxBecomesUpstreamError(t *testing.T) {
 	}
 }
 
+func TestReadChunk(t *testing.T) {
+	server, rec := stub(t, http.StatusOK, map[string]any{
+		"path":       "/iplant/file.txt",
+		"start":      "4",
+		"chunk-size": "1024",
+		"file-size":  "10",
+		"chunk":      "456789",
+	})
+	terrain, err := NewTerrain(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content, fileSize, err := terrain.ReadChunk(context.Background(), testToken, "/iplant/file.txt", 4, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rec.Method != http.MethodPost || rec.Path != "/secured/filesystem/read-chunk" {
+		t.Errorf("request = %s %s, want POST /secured/filesystem/read-chunk", rec.Method, rec.Path)
+	}
+	wantBody, _ := json.Marshal(map[string]any{"path": "/iplant/file.txt", "position": 4, "chunk-size": 1024})
+	gotBody, _ := json.Marshal(rec.Body)
+	if string(wantBody) != string(gotBody) {
+		t.Errorf("body = %s, want %s", gotBody, wantBody)
+	}
+	if string(content) != "456789" {
+		t.Errorf("content = %q, want %q", content, "456789")
+	}
+	if fileSize != 10 {
+		t.Errorf("fileSize = %d, want 10", fileSize)
+	}
+}
+
 func TestListDirectoryPaging(t *testing.T) {
 	fake := terraintest.NewData()
 	entries := make([]terraintest.DataEntry, 0, 2500)
