@@ -42,11 +42,11 @@ type env struct {
 func newEnv(t *testing.T, respond func(r *http.Request) (int, any)) *env {
 	t.Helper()
 
-	// The data endpoints are always served by the stateful fake; everything
-	// else goes to the per-test respond function.
+	// The data endpoints are always served by the stateful fake; bootstrap and
+	// everything else go to the per-test respond function.
 	fakeData := terraintest.NewData()
 	combined := func(r *http.Request) (int, any) {
-		if strings.HasPrefix(r.URL.Path, "/secured/") {
+		if r.URL.Path != "/secured/bootstrap" && strings.HasPrefix(r.URL.Path, "/secured/") {
 			return fakeData.Respond(r)
 		}
 		if respond == nil {
@@ -85,11 +85,12 @@ func newEnv(t *testing.T, respond func(r *http.Request) (int, any)) *env {
 		cfg,
 	)
 	data := handlers.NewData(terrainClient)
+	user := handlers.NewUser(terrainClient)
 
 	e := echo.New()
 	e.HTTPErrorHandler = apierror.HTTPErrorHandler
 	e.Pre(handlers.StripPathPrefix(cfg.PathPrefix))
-	e.Any("/mcp", echo.WrapHandler(Handler(Deps{Apps: apps, Data: data, Cfg: cfg}, verifier)))
+	e.Any("/mcp", echo.WrapHandler(Handler(Deps{Apps: apps, Data: data, User: user, Cfg: cfg}, verifier)))
 	RegisterWellKnown(e, cfg)
 
 	srv := httptest.NewServer(e)
@@ -230,6 +231,51 @@ func TestMCPListApps(t *testing.T) {
 
 	text := textContent(t, result)
 	for _, want := range []string{"Found 2 apps:", "**JupyterLab**", "ID: `" + testAppID + "`", "Integrator: bob", "Description: notebooks"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestMCPWhoami(t *testing.T) {
+	env := newEnv(t, func(r *http.Request) (int, any) {
+		if r.URL.Path != "/secured/bootstrap" {
+			return http.StatusInternalServerError, nil
+		}
+		return 200, map[string]any{
+			"user_info": map[string]any{
+				"username":      "alice",
+				"full_username": "alice@iplantcollaborative.org",
+				"email":         "alice@example.org",
+				"first_name":    "Alice",
+				"last_name":     "Liddell",
+			},
+			"data_info": map[string]any{
+				"user_home_path":  "/cyverse/home/alice",
+				"user_trash_path": "/cyverse/trash/home/alice",
+			},
+			"preferences": map[string]any{
+				"default_output_folder": map[string]any{"path": "/cyverse/home/alice/analyses"},
+			},
+		}
+	})
+	session := env.connect(t, nil)
+
+	result := callTool(t, session, "whoami", map[string]any{})
+	if result.IsError {
+		t.Fatalf("IsError = true: %s", textContent(t, result))
+	}
+
+	text := textContent(t, result)
+	for _, want := range []string{
+		"Username: alice",
+		"Full Username: alice@iplantcollaborative.org",
+		"Name: Alice Liddell",
+		"Email: alice@example.org",
+		"Home Directory: `/cyverse/home/alice`",
+		"Trash Directory: `/cyverse/trash/home/alice`",
+		"Default Output Folder: `/cyverse/home/alice/analyses`",
+	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text missing %q:\n%s", want, text)
 		}

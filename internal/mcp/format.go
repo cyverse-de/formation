@@ -20,6 +20,31 @@ func strOr(m map[string]any, key, fallback string) string {
 	return fmt.Sprint(v)
 }
 
+func formatWhoami(info *handlers.UserInfo) string {
+	var b strings.Builder
+	b.WriteString("**Current User**\n\n")
+	fmt.Fprintf(&b, "Username: %s\n", info.Username)
+	if info.FullUsername != "" {
+		fmt.Fprintf(&b, "Full Username: %s\n", info.FullUsername)
+	}
+	if name := strings.TrimSpace(info.FirstName + " " + info.LastName); name != "" {
+		fmt.Fprintf(&b, "Name: %s\n", name)
+	}
+	if info.Email != "" {
+		fmt.Fprintf(&b, "Email: %s\n", info.Email)
+	}
+	if info.HomePath != "" {
+		fmt.Fprintf(&b, "Home Directory: `%s`\n", info.HomePath)
+	}
+	if info.TrashPath != "" {
+		fmt.Fprintf(&b, "Trash Directory: `%s`\n", info.TrashPath)
+	}
+	if info.DefaultOutputFolder != "" {
+		fmt.Fprintf(&b, "Default Output Folder: `%s`\n", info.DefaultOutputFolder)
+	}
+	return b.String()
+}
+
 func formatAppsList(result map[string]any) string {
 	apps, _ := result["apps"].([]map[string]any)
 	if len(apps) == 0 {

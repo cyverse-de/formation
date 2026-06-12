@@ -93,6 +93,7 @@ func buildServer(cfg *config.Config) (*echo.Echo, error) {
 	subdomains := vice.NewSubdomainResolver(terrainClient)
 	apps := handlers.NewApps(terrainClient, urlChecker, subdomains, cfg)
 	data := handlers.NewData(terrainClient)
+	user := handlers.NewUser(terrainClient)
 
 	landing, err := handlers.Landing(cfg, mcpserver.ToolNames)
 	if err != nil {
@@ -100,7 +101,7 @@ func buildServer(cfg *config.Config) (*echo.Echo, error) {
 	}
 	e.GET("/", landing)
 
-	mcpHandler := mcpserver.Handler(mcpserver.Deps{Apps: apps, Data: data, Cfg: cfg}, verifier)
+	mcpHandler := mcpserver.Handler(mcpserver.Deps{Apps: apps, Data: data, User: user, Cfg: cfg}, verifier)
 	// POST carries JSON-RPC; GET and DELETE are part of the streamable
 	// HTTP transport. The SDK answers its own errors, so the JSON error
 	// handler stays out of the MCP path.
