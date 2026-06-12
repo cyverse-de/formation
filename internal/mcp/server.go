@@ -46,6 +46,15 @@ var ToolNames = []string{
 	"delete_data",
 }
 
+// serverInstructions is surfaced to MCP hosts in the initialize result so the
+// model understands formation's scope and avoids overwhelming the context with
+// large or binary reads.
+const serverInstructions = "formation provides text-based access to the CyVerse Discovery Environment: " +
+	"apps, analyses, and the data store. browse_data returns file contents inline, so they become part of " +
+	"the conversation and consume context — prefer the offset and limit parameters to page through a file " +
+	"rather than reading it whole. Only text-based formats can be retrieved; binary files (images, archives, " +
+	"compiled data, and similar) cannot be read back through these tools."
+
 // NewServer builds the MCP server with all formation tools registered.
 func NewServer(d Deps) *sdk.Server {
 	s := &server{apps: d.Apps, data: d.Data, user: d.User, cfg: d.Cfg}
@@ -53,7 +62,7 @@ func NewServer(d Deps) *sdk.Server {
 		Name:    "formation",
 		Title:   "CyVerse Formation",
 		Version: "1.0.0",
-	}, nil)
+	}, &sdk.ServerOptions{Instructions: serverInstructions})
 	s.registerUserTools(srv)
 	s.registerAppsTools(srv)
 	s.registerDataTools(srv)

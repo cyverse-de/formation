@@ -1,12 +1,22 @@
 package mcp
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/cyverse-de/formation/internal/handlers"
 )
+
+// looksBinary reports whether a file chunk is non-text. read-chunk returns the
+// chunk as a JSON string, so invalid UTF-8 bytes arrive sanitized to U+FFFD and
+// no longer signal binary; an embedded NUL, which never appears in text and
+// survives the round trip, is the reliable signal. The UTF-8 check remains a
+// safety net for any future raw-byte read path.
+func looksBinary(content []byte) bool {
+	return !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0
+}
 
 // The text builders here mirror the Python formation-mcp server's tool output
 // (minus the emoji) so prompts written against it keep working.
@@ -252,14 +262,12 @@ func formatBrowse(result *handlers.BrowseResult) string {
 				}
 			}
 		}
+	} else if looksBinary(result.Content) {
+		fmt.Fprintf(&b, "**Unsupported file type:** %d bytes — formation serves text content only; this file is not text and cannot be retrieved.", len(result.Content))
 	} else {
-		if utf8.Valid(result.Content) {
-			fmt.Fprintf(&b, "**File Content:**\n\n```\n%s\n```", result.Content)
-			if result.Truncated {
-				b.WriteString("\n\n*(content truncated; use offset/limit to read more)*")
-			}
-		} else {
-			fmt.Fprintf(&b, "**Binary File:** %d bytes\n\n*(Content cannot be displayed as text)*", len(result.Content))
+		fmt.Fprintf(&b, "**File Content:**\n\n```\n%s\n```", result.Content)
+		if result.Truncated {
+			b.WriteString("\n\n*(truncated; each read adds the returned bytes to the conversation — page with offset/limit)*")
 		}
 	}
 
