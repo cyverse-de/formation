@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"path"
+	"unicode/utf8"
 
 	"github.com/cyverse-de/formation/internal/apierror"
 	"github.com/cyverse-de/formation/internal/clients"
@@ -45,8 +47,17 @@ type BrowseResult struct {
 	Type      string
 	Entries   []Entry
 	Content   []byte
-	Truncated bool // more file bytes were available than returned
+	Offset    int   // byte offset the file read started at
+	FileSize  int64 // total size of the file in bytes
+	Binary    bool  // content is not text and should not be rendered
+	Truncated bool  // more file bytes follow the returned window
 	Metadata  []clients.MetadataAVU
+}
+
+// NextOffset returns the byte offset where the next page of a truncated file
+// read should start.
+func (r *BrowseResult) NextOffset() int {
+	return r.Offset + len(r.Content)
 }
 
 // upstreamStatus returns the HTTP status of an UpstreamError, or 0.
@@ -153,6 +164,27 @@ func (h *Data) listEntries(ctx context.Context, token, irodsPath string, childre
 	return entries, nil
 }
 
+// looksBinary reports whether a file chunk is non-text. data-info delivers
+// chunks as JSON strings, replacing interior invalid UTF-8 with U+FFFD, so
+// binary content arrives as either NUL bytes (valid UTF-8, preserved) or runs
+// of replacement characters; clean text produces neither. The utf8.Valid
+// check is a safety net for any future raw-byte read path.
+func looksBinary(content []byte) bool {
+	return bytes.IndexByte(content, 0) >= 0 ||
+		bytes.Count(content, []byte("�")) > 2 ||
+		!utf8.Valid(content)
+}
+
+// trimToRuneBoundary cuts content to at most limit bytes without splitting a
+// multibyte character.
+func trimToRuneBoundary(content []byte, limit int) []byte {
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(content[cut]) {
+		cut--
+	}
+	return content[:cut]
+}
+
 // pathMetadata returns the data item's iRODS AVUs.
 func (h *Data) pathMetadata(ctx context.Context, token, dataID string) ([]clients.MetadataAVU, error) {
 	avus, _, err := h.terrain.GetMetadata(ctx, token, dataID)
@@ -216,22 +248,29 @@ func (h *Data) Browse(ctx context.Context, token, irodsPath string, offset, limi
 		result.Entries = entries
 	} else {
 		result.Type = TypeDataObject
+		// data-info errors on negative seek positions; treat them as 0 like
+		// the old download path did.
+		offset = max(offset, 0)
 		readLimit := maxBytes
 		if limit > 0 && limit < readLimit {
 			readLimit = limit
 		}
-		content, fileSize, err := h.terrain.ReadChunk(ctx, token, irodsPath, offset, readLimit)
+		// Over-read by one rune so a character split across the window edge
+		// (which data-info would silently drop) can be returned whole; the
+		// rune-boundary trim below keeps the page within readLimit.
+		content, fileSize, err := h.terrain.ReadChunk(ctx, token, irodsPath, offset, readLimit+utf8.UTFMax-1)
 		if err != nil {
 			return nil, mapDataError(err, irodsPath, "Path")
 		}
-		// data-info caps the read at readLimit, but a chunk of non-UTF-8 bytes
-		// can expand when JSON-encoded; keep the response within maxBytes.
-		if len(content) > readLimit {
-			content = content[:readLimit]
+		result.Binary = looksBinary(content)
+		if !result.Binary && len(content) > readLimit {
+			content = trimToRuneBoundary(content, readLimit)
 		}
 		result.Content = content
-		// More bytes follow when the file extends past the requested window.
-		result.Truncated = int64(offset)+int64(readLimit) < fileSize
+		result.Offset = offset
+		result.FileSize = fileSize
+		// More bytes follow when the file extends past the delivered window.
+		result.Truncated = int64(result.NextOffset()) < fileSize
 	}
 
 	// Metadata lookup errors are swallowed so an outage doesn't break reads.

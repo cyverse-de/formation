@@ -8,6 +8,7 @@ import (
 	gopath "path"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // DataAVU mirrors terrain's iRODS AVU payload shape.
@@ -254,6 +255,9 @@ func (d *Data) listDirectory(r *http.Request) (int, any) {
 
 // readChunk serves terrain's random-access read-chunk endpoint, returning the
 // data-info chunk record (the requested byte window plus the total file size).
+// Edge behaviors mimic data-info as observed against QA: a negative position
+// is an unchecked exception, a position past EOF reads as empty, and the bytes
+// of a rune split across a window edge are silently dropped.
 func (d *Data) readChunk(r *http.Request) (int, any) {
 	var body struct {
 		Path      string `json:"path"`
@@ -261,6 +265,9 @@ func (d *Data) readChunk(r *http.Request) (int, any) {
 		ChunkSize int    `json:"chunk-size"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Position < 0 || body.ChunkSize <= 0 {
+		return http.StatusInternalServerError, errorBody("ERR_UNCHECKED_EXCEPTION")
+	}
 	if status, errBody := d.check(body.Path); status != 0 {
 		return status, errBody
 	}
@@ -269,19 +276,36 @@ func (d *Data) readChunk(r *http.Request) (int, any) {
 		return http.StatusBadRequest, errorBody("ERR_NOT_A_FILE")
 	}
 
-	start := min(max(body.Position, 0), len(content))
-	end := len(content)
-	if body.ChunkSize > 0 {
-		end = min(start+body.ChunkSize, len(content))
-	}
+	start := min(body.Position, len(content))
+	end := min(start+body.ChunkSize, len(content))
 	return http.StatusOK, map[string]any{
 		"path":       body.Path,
 		"user":       "fake",
 		"start":      strconv.Itoa(start),
 		"chunk-size": strconv.Itoa(body.ChunkSize),
 		"file-size":  strconv.Itoa(len(content)),
-		"chunk":      string(content[start:end]),
+		"chunk":      string(trimSplitRunes(content[start:end])),
 	}
+}
+
+// trimSplitRunes mimics data-info's string decoding at the window edges:
+// leading continuation bytes and a trailing incomplete rune are dropped.
+// Interior invalid bytes are left alone — the JSON encoding replaces them
+// with U+FFFD, like data-info's decoder does.
+func trimSplitRunes(window []byte) []byte {
+	for len(window) > 0 && !utf8.RuneStart(window[0]) {
+		window = window[1:]
+	}
+	for range utf8.UTFMax - 1 {
+		if len(window) == 0 {
+			break
+		}
+		if r, _ := utf8.DecodeLastRune(window); r != utf8.RuneError {
+			break
+		}
+		window = window[:len(window)-1]
+	}
+	return window
 }
 
 // filePart reads the multipart "file" part's contents and filename.

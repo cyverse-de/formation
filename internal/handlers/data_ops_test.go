@@ -20,11 +20,7 @@ func newDataOps(t *testing.T) (*Data, *terraintest.Data) {
 	t.Helper()
 
 	fakeData := terraintest.NewData()
-	terrain := terraintest.New(t, fakeData.Respond)
-	terrainClient, err := clients.NewTerrain(terrain.URL())
-	if err != nil {
-		t.Fatal(err)
-	}
+	terrainClient, _ := newTerrainClient(t, fakeData.Respond)
 	return NewData(terrainClient), fakeData
 }
 
@@ -66,27 +62,34 @@ func TestBrowse(t *testing.T) {
 	})
 
 	t.Run("file reads", func(t *testing.T) {
-		content := "0123456789"
+		// "aédef" pages losslessly at limit=2 as "a", "é", "de", "f": a rune
+		// that doesn't fit in the window is deferred to the next page, and
+		// NextOffset reports where that page starts.
 		tests := []struct {
-			name          string
-			offset, limit int
-			maxBytes      int
-			want          string
-			wantTruncated bool
+			name           string
+			content        string
+			offset, limit  int
+			maxBytes       int
+			want           string
+			wantTruncated  bool
+			wantNextOffset int
 		}{
-			{"full contents", 0, 0, 1024, content, false},
-			{"offset", 4, 0, 1024, "456789", false},
-			{"limit leaving more bytes", 0, 3, 1024, "012", true},
-			{"offset and limit", 2, 4, 1024, "2345", true},
-			{"offset past end", 100, 0, 1024, "", false},
-			{"truncated at maxBytes", 0, 0, 4, "0123", true},
-			{"limit below maxBytes wins", 0, 3, 4, "012", true},
+			{"full contents", "0123456789", 0, 0, 1024, "0123456789", false, 10},
+			{"offset", "0123456789", 4, 0, 1024, "456789", false, 10},
+			{"limit leaving more bytes", "0123456789", 0, 3, 1024, "012", true, 3},
+			{"offset and limit", "0123456789", 2, 4, 1024, "2345", true, 6},
+			{"offset past end", "0123456789", 100, 0, 1024, "", false, 100},
+			{"negative offset reads from the start", "0123456789", -5, 3, 1024, "012", true, 3},
+			{"truncated at maxBytes", "0123456789", 0, 0, 4, "0123", true, 4},
+			{"limit below maxBytes wins", "0123456789", 0, 3, 4, "012", true, 3},
+			{"rune split at the window edge is deferred", "aédef", 0, 2, 1024, "a", true, 1},
+			{"deferred rune is delivered whole on the next page", "aédef", 1, 2, 1024, "é", true, 3},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				data, fake := newDataOps(t)
-				fake.Files["/iplant/file.txt"] = []byte(content)
+				fake.Files["/iplant/file.txt"] = []byte(tt.content)
 
 				result, err := data.Browse(context.Background(), opsToken, "/iplant/file.txt",
 					tt.offset, tt.limit, false, tt.maxBytes)
@@ -101,6 +104,43 @@ func TestBrowse(t *testing.T) {
 				}
 				if result.Truncated != tt.wantTruncated {
 					t.Errorf("truncated = %v, want %v", result.Truncated, tt.wantTruncated)
+				}
+				if result.Binary {
+					t.Error("binary = true for text content")
+				}
+				if result.FileSize != int64(len(tt.content)) {
+					t.Errorf("fileSize = %d, want %d", result.FileSize, len(tt.content))
+				}
+				if result.NextOffset() != tt.wantNextOffset {
+					t.Errorf("nextOffset = %d, want %d", result.NextOffset(), tt.wantNextOffset)
+				}
+			})
+		}
+	})
+
+	t.Run("binary detection", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			content []byte
+		}{
+			{"NUL byte", []byte{0xff, 0xfe, 0x00, 0x01}},
+			{"NUL-free invalid bytes", []byte{0xff, 0xfe, 0xff, 0xfe, 'A'}},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				data, fake := newDataOps(t)
+				fake.Files["/iplant/blob.bin"] = tt.content
+
+				result, err := data.Browse(context.Background(), opsToken, "/iplant/blob.bin", 0, 0, false, 1024)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !result.Binary {
+					t.Errorf("binary = false for %q", tt.content)
+				}
+				if result.FileSize != int64(len(tt.content)) {
+					t.Errorf("fileSize = %d, want %d", result.FileSize, len(tt.content))
 				}
 			})
 		}

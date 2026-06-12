@@ -28,17 +28,17 @@ func NewTerrain(baseURL string) (*Terrain, error) {
 	return &Terrain{
 		base:   base,
 		client: &http.Client{Timeout: defaultTimeout},
-		// stream has no overall deadline: it carries whole-file uploads and
-		// downloads, which can legitimately outlive any fixed timeout. The
+		// stream has no overall deadline: it carries whole-file uploads,
+		// which can legitimately outlive any fixed timeout. The
 		// response-header timeout still bounds an unresponsive terrain.
 		stream: &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: defaultTimeout}},
 	}, nil
 }
 
-// Bootstrap returns the caller's session/orientation info (identity, home and
-// trash paths, default output folder) from terrain's aggregator endpoint.
-func (t *Terrain) Bootstrap(ctx context.Context, token string) (map[string]any, error) {
-	return getMap(ctx, t.client, endpoint(t.base, nil, "secured", "bootstrap"), token)
+// GetPreferences returns the caller's DE preferences; terrain fills in the
+// default output folder even for users who have never saved any.
+func (t *Terrain) GetPreferences(ctx context.Context, token string) (map[string]any, error) {
+	return getMap(ctx, t.client, endpoint(t.base, nil, "secured", "preferences"), token)
 }
 
 // GetApp fetches a single app's details, including its parameter groups.

@@ -152,6 +152,17 @@ func TestTerrainClientRequests(t *testing.T) {
 			want:      map[string]any{"externalID": "ext-1"},
 		},
 		{
+			name: "GetPreferences",
+			call: func(c *Terrain) (map[string]any, error) {
+				return c.GetPreferences(context.Background(), testToken)
+			},
+			method:    http.MethodGet,
+			wantPath:  "/secured/preferences",
+			wantQuery: map[string]string{},
+			response:  map[string]any{"default_output_folder": map[string]any{"path": "/iplant/home/alice/analyses"}},
+			want:      map[string]any{"default_output_folder": map[string]any{"path": "/iplant/home/alice/analyses"}},
+		},
+		{
 			name: "GetAsyncData",
 			call: func(c *Terrain) (map[string]any, error) {
 				return c.GetAsyncData(context.Background(), testToken, "ext-1")
@@ -277,6 +288,9 @@ func TestReadChunk(t *testing.T) {
 
 	if rec.Method != http.MethodPost || rec.Path != "/secured/filesystem/read-chunk" {
 		t.Errorf("request = %s %s, want POST /secured/filesystem/read-chunk", rec.Method, rec.Path)
+	}
+	if rec.Authorization != "Bearer "+testToken {
+		t.Errorf("Authorization = %q, want the bearer token", rec.Authorization)
 	}
 	wantBody, _ := json.Marshal(map[string]any{"path": "/iplant/file.txt", "position": 4, "chunk-size": 1024})
 	gotBody, _ := json.Marshal(rec.Body)

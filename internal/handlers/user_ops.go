@@ -2,65 +2,77 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/cyverse-de/formation/internal/auth"
 	"github.com/cyverse-de/formation/internal/clients"
 )
 
-// User provides the caller's account and data-store orientation info backed by
-// terrain's bootstrap endpoint, exposed through the whoami MCP tool.
+// User provides the caller's account and data-store orientation info for the
+// whoami MCP tool. Identity comes from the verified JWT claims; the home path
+// is constructed from the configured zone and verified with a stat; the
+// default output folder comes from terrain's preferences endpoint. This stays
+// off terrain's bootstrap aggregator, which records a DE login event and fans
+// out to five services per call.
 type User struct {
-	terrain *clients.Terrain
+	terrain    *clients.Terrain
+	zone       string
+	userSuffix string
 }
 
-// NewUser wires the user operations with the terrain client.
-func NewUser(terrainClient *clients.Terrain) *User {
-	return &User{terrain: terrainClient}
+// NewUser wires the user operations with the terrain client, the iRODS zone
+// user paths live in, and the suffix that qualifies usernames.
+func NewUser(terrainClient *clients.Terrain, zone, userSuffix string) *User {
+	return &User{terrain: terrainClient, zone: zone, userSuffix: userSuffix}
 }
 
 // UserInfo is the orientation data whoami reports for the authenticated caller.
-// Optional fields (e.g. DefaultOutputFolder) are empty when terrain omits them.
+// Optional fields (e.g. DefaultOutputFolder) are empty when unavailable.
 type UserInfo struct {
 	Username            string
 	FullUsername        string
+	Name                string
 	Email               string
-	FirstName           string
-	LastName            string
 	HomePath            string
 	TrashPath           string
 	DefaultOutputFolder string
 }
 
-// Bootstrap fetches and flattens the caller's terrain bootstrap into UserInfo.
-func (h *User) Bootstrap(ctx context.Context, token string) (*UserInfo, error) {
-	result, err := h.terrain.Bootstrap(ctx, token)
+// Info assembles the caller's orientation info. The stat on the constructed
+// home path keeps the reported location authoritative rather than assumed.
+func (h *User) Info(ctx context.Context, token string, claims *auth.Claims) (*UserInfo, error) {
+	username, err := claims.Username()
 	if err != nil {
 		return nil, err
 	}
 
-	userInfo := subMap(result, "user_info")
-	dataInfo := subMap(result, "data_info")
-	defaultOutput := subMap(subMap(result, "preferences"), "default_output_folder")
+	homePath := fmt.Sprintf("/%s/home/%s", h.zone, username)
+	if _, err := h.statPath(ctx, token, homePath); err != nil {
+		return nil, err
+	}
 
-	return &UserInfo{
-		Username:            mapString(userInfo, "username"),
-		FullUsername:        mapString(userInfo, "full_username"),
-		Email:               mapString(userInfo, "email"),
-		FirstName:           mapString(userInfo, "first_name"),
-		LastName:            mapString(userInfo, "last_name"),
-		HomePath:            mapString(dataInfo, "user_home_path"),
-		TrashPath:           mapString(dataInfo, "user_trash_path"),
-		DefaultOutputFolder: mapString(defaultOutput, "path"),
-	}, nil
+	info := &UserInfo{
+		Username:     username,
+		FullUsername: username + h.userSuffix,
+		Name:         claims.DisplayName(),
+		Email:        claims.EmailAddress(),
+		HomePath:     homePath,
+		TrashPath:    fmt.Sprintf("/%s/trash/home/%s", h.zone, username),
+	}
+
+	// Preferences are auxiliary: a user-prefs outage shouldn't break whoami,
+	// so a failed lookup just omits the default output folder.
+	if prefs, err := h.terrain.GetPreferences(ctx, token); err == nil {
+		info.DefaultOutputFolder = mapString(subMap(prefs, "default_output_folder"), "path")
+	}
+	return info, nil
 }
 
-// subMap returns m[key] as a nested object, or nil when absent or not a map.
-func subMap(m map[string]any, key string) map[string]any {
-	nested, _ := m[key].(map[string]any)
-	return nested
-}
-
-// mapString returns m[key] as a string, or "" when absent or not a string.
-func mapString(m map[string]any, key string) string {
-	s, _ := m[key].(string)
-	return s
+// statPath verifies the home path exists with formation error mapping.
+func (h *User) statPath(ctx context.Context, token, irodsPath string) (*clients.StatInfo, error) {
+	info, err := h.terrain.Stat(ctx, token, irodsPath)
+	if err != nil {
+		return nil, mapDataError(err, irodsPath, "Home directory")
+	}
+	return info, nil
 }

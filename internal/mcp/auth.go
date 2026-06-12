@@ -53,15 +53,24 @@ func tokenVerifier(v *auth.Verifier) sdkauth.TokenVerifier {
 	}
 }
 
-// requestCaller returns the terrain-ready caller for a tool call: the verified
-// user's JWT username plus their own bearer token, forwarded as-is.
-func requestCaller(req *sdk.CallToolRequest) (*auth.Caller, error) {
+// requestIdentity returns the verified JWT claims and bearer token for a tool call.
+func requestIdentity(req *sdk.CallToolRequest) (*auth.Claims, string, error) {
 	if req.Extra != nil && req.Extra.TokenInfo != nil {
 		claims, ok := req.Extra.TokenInfo.Extra[claimsExtraKey].(*auth.Claims)
 		token, _ := req.Extra.TokenInfo.Extra[tokenExtraKey].(string)
 		if ok {
-			return auth.UserCaller(claims, token)
+			return claims, token, nil
 		}
 	}
-	return nil, errors.New("not authenticated")
+	return nil, "", errors.New("not authenticated")
+}
+
+// requestCaller returns the terrain-ready caller for a tool call: the verified
+// user's JWT username plus their own bearer token, forwarded as-is.
+func requestCaller(req *sdk.CallToolRequest) (*auth.Caller, error) {
+	claims, token, err := requestIdentity(req)
+	if err != nil {
+		return nil, err
+	}
+	return auth.UserCaller(claims, token)
 }

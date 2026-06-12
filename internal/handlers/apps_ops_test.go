@@ -11,7 +11,6 @@ import (
 
 	"github.com/cyverse-de/formation/internal/apierror"
 	"github.com/cyverse-de/formation/internal/auth"
-	"github.com/cyverse-de/formation/internal/clients"
 	"github.com/cyverse-de/formation/internal/config"
 	"github.com/cyverse-de/formation/internal/terraintest"
 	"github.com/cyverse-de/formation/internal/vice"
@@ -31,11 +30,7 @@ var opsCaller = &auth.Caller{Token: "test-token", Username: "alice"}
 func newAppsOps(t *testing.T, respond func(r *http.Request) (int, any)) (*Apps, *terraintest.Server) {
 	t.Helper()
 
-	terrain := terraintest.New(t, respond)
-	terrainClient, err := clients.NewTerrain(terrain.URL())
-	if err != nil {
-		t.Fatal(err)
-	}
+	terrainClient, terrain := newTerrainClient(t, respond)
 
 	cfg := &config.Config{
 		UserSuffix: "@iplantcollaborative.org",
