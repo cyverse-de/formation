@@ -93,7 +93,7 @@ func buildServer(cfg *config.Config) (*echo.Echo, error) {
 	subdomains := vice.NewSubdomainResolver(terrainClient)
 	apps := handlers.NewApps(terrainClient, urlChecker, subdomains, cfg)
 	data := handlers.NewData(terrainClient)
-	user := handlers.NewUser(terrainClient)
+	user := handlers.NewUser(terrainClient, cfg.OutputZone, cfg.UserSuffix)
 
 	landing, err := handlers.Landing(cfg, mcpserver.ToolNames)
 	if err != nil {

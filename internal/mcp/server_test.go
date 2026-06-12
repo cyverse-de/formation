@@ -42,11 +42,11 @@ type env struct {
 func newEnv(t *testing.T, respond func(r *http.Request) (int, any)) *env {
 	t.Helper()
 
-	// The data endpoints are always served by the stateful fake; bootstrap and
-	// everything else go to the per-test respond function.
+	// The data endpoints are always served by the stateful fake; preferences
+	// and everything else go to the per-test respond function.
 	fakeData := terraintest.NewData()
 	combined := func(r *http.Request) (int, any) {
-		if r.URL.Path != "/secured/bootstrap" && strings.HasPrefix(r.URL.Path, "/secured/") {
+		if r.URL.Path != "/secured/preferences" && strings.HasPrefix(r.URL.Path, "/secured/") {
 			return fakeData.Respond(r)
 		}
 		if respond == nil {
@@ -85,7 +85,7 @@ func newEnv(t *testing.T, respond func(r *http.Request) (int, any)) *env {
 		cfg,
 	)
 	data := handlers.NewData(terrainClient)
-	user := handlers.NewUser(terrainClient)
+	user := handlers.NewUser(terrainClient, cfg.OutputZone, cfg.UserSuffix)
 
 	e := echo.New()
 	e.HTTPErrorHandler = apierror.HTTPErrorHandler
@@ -239,27 +239,19 @@ func TestMCPListApps(t *testing.T) {
 
 func TestMCPWhoami(t *testing.T) {
 	env := newEnv(t, func(r *http.Request) (int, any) {
-		if r.URL.Path != "/secured/bootstrap" {
+		if r.URL.Path != "/secured/preferences" {
 			return http.StatusInternalServerError, nil
 		}
-		return 200, map[string]any{
-			"user_info": map[string]any{
-				"username":      "alice",
-				"full_username": "alice@iplantcollaborative.org",
-				"email":         "alice@example.org",
-				"first_name":    "Alice",
-				"last_name":     "Liddell",
-			},
-			"data_info": map[string]any{
-				"user_home_path":  "/cyverse/home/alice",
-				"user_trash_path": "/cyverse/trash/home/alice",
-			},
-			"preferences": map[string]any{
-				"default_output_folder": map[string]any{"path": "/cyverse/home/alice/analyses"},
-			},
+		return http.StatusOK, map[string]any{
+			"default_output_folder": map[string]any{"path": "/iplant/home/alice/analyses"},
 		}
 	})
-	session := env.connect(t, nil)
+	env.data.Dirs["/iplant/home/alice"] = nil
+
+	session := env.connect(t, map[string]any{
+		"email": "alice@example.org",
+		"name":  "Alice Liddell",
+	})
 
 	result := callTool(t, session, "whoami", map[string]any{})
 	if result.IsError {
@@ -272,9 +264,9 @@ func TestMCPWhoami(t *testing.T) {
 		"Full Username: alice@iplantcollaborative.org",
 		"Name: Alice Liddell",
 		"Email: alice@example.org",
-		"Home Directory: `/cyverse/home/alice`",
-		"Trash Directory: `/cyverse/trash/home/alice`",
-		"Default Output Folder: `/cyverse/home/alice/analyses`",
+		"Home Directory: `/iplant/home/alice`",
+		"Trash Directory: `/iplant/trash/home/alice`",
+		"Default Output Folder: `/iplant/home/alice/analyses`",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text missing %q:\n%s", want, text)
@@ -479,7 +471,7 @@ func TestMCPDataTools(t *testing.T) {
 			"path": "/iplant/file.txt", "limit": 4, "include_metadata": true,
 		})
 		text := textContent(t, result)
-		for _, want := range []string{"**File Content:**", "```\n0123\n```", "*(truncated", "- weight: 12,kg"} {
+		for _, want := range []string{"**File Content:**", "```\n0123\n```", "*(showing bytes 0–4 of 10; continue with offset=4", "- weight: 12,kg"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("text missing %q:\n%s", want, text)
 			}
@@ -493,8 +485,10 @@ func TestMCPDataTools(t *testing.T) {
 		session := env.connect(t, nil)
 		result := callTool(t, session, "browse_data", map[string]any{"path": "/iplant/blob.bin"})
 		text := textContent(t, result)
-		if !strings.Contains(text, "**Unsupported file type:**") || !strings.Contains(text, "text content only") {
-			t.Errorf("binary text missing the unsupported-type notice:\n%s", text)
+		for _, want := range []string{"**Unsupported file type:** 4 bytes", "text content only"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("binary text missing %q:\n%s", want, text)
+			}
 		}
 	})
 

@@ -83,6 +83,18 @@ func valueOr(m map[string]any, key string, fallback any) any {
 	return fallback
 }
 
+// subMap returns m[key] as a nested object, or nil when absent or not a map.
+func subMap(m map[string]any, key string) map[string]any {
+	nested, _ := m[key].(map[string]any)
+	return nested
+}
+
+// mapString returns m[key] as a string, or "" when absent or not a string.
+func mapString(m map[string]any, key string) string {
+	s, _ := m[key].(string)
+	return s
+}
+
 // setDefault mirrors Python dict.setdefault.
 func setDefault(m map[string]any, key string, value any) {
 	if _, ok := m[key]; !ok {

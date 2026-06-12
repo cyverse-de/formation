@@ -19,11 +19,11 @@ func (s *server) registerUserTools(srv *sdk.Server) {
 }
 
 func (s *server) whoami(ctx context.Context, req *sdk.CallToolRequest, _ whoamiInput) (*sdk.CallToolResult, error) {
-	caller, err := requestCaller(req)
+	claims, token, err := requestIdentity(req)
 	if err != nil {
 		return nil, err
 	}
-	info, err := s.user.Bootstrap(ctx, caller.Token)
+	info, err := s.user.Info(ctx, token, claims)
 	if err != nil {
 		return nil, err
 	}

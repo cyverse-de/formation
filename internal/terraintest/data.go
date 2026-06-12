@@ -8,6 +8,7 @@ import (
 	gopath "path"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // DataAVU mirrors terrain's iRODS AVU payload shape.
@@ -254,6 +255,9 @@ func (d *Data) listDirectory(r *http.Request) (int, any) {
 
 // readChunk serves terrain's random-access read-chunk endpoint, returning the
 // data-info chunk record (the requested byte window plus the total file size).
+// Edge behaviors mimic data-info as observed against QA: a negative position
+// is an unchecked exception, a position past EOF reads as empty, and the bytes
+// of a rune split across a window edge are silently dropped.
 func (d *Data) readChunk(r *http.Request) (int, any) {
 	var body struct {
 		Path      string `json:"path"`
@@ -261,6 +265,9 @@ func (d *Data) readChunk(r *http.Request) (int, any) {
 		ChunkSize int    `json:"chunk-size"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Position < 0 || body.ChunkSize <= 0 {
+		return http.StatusInternalServerError, errorBody("ERR_UNCHECKED_EXCEPTION")
+	}
 	if status, errBody := d.check(body.Path); status != 0 {
 		return status, errBody
 	}
@@ -269,18 +276,54 @@ func (d *Data) readChunk(r *http.Request) (int, any) {
 		return http.StatusBadRequest, errorBody("ERR_NOT_A_FILE")
 	}
 
-	start := min(max(body.Position, 0), len(content))
-	end := len(content)
-	if body.ChunkSize > 0 {
-		end = min(start+body.ChunkSize, len(content))
-	}
+	start := min(body.Position, len(content))
+	end := min(start+body.ChunkSize, len(content))
 	return http.StatusOK, map[string]any{
 		"path":       body.Path,
 		"user":       "fake",
 		"start":      strconv.Itoa(start),
 		"chunk-size": strconv.Itoa(body.ChunkSize),
 		"file-size":  strconv.Itoa(len(content)),
-		"chunk":      string(content[start:end]),
+		"chunk":      string(trimSplitRunes(content[start:end])),
+	}
+}
+
+// trimSplitRunes mimics data-info's string decoding at the window edges:
+// leading continuation bytes and a trailing incomplete (but otherwise valid)
+// rune are dropped. Standalone invalid bytes are left alone — the JSON
+// encoding replaces them with U+FFFD, like data-info's decoder does — and a
+// complete literal U+FFFD character is kept intact.
+func trimSplitRunes(window []byte) []byte {
+	for len(window) > 0 && !utf8.RuneStart(window[0]) {
+		window = window[1:]
+	}
+	for i := 1; i < utf8.UTFMax && i <= len(window); i++ {
+		lead := window[len(window)-i]
+		if !utf8.RuneStart(lead) {
+			continue
+		}
+		if runeLenFromLead(lead) > i {
+			window = window[:len(window)-i]
+		}
+		break
+	}
+	return window
+}
+
+// runeLenFromLead returns the UTF-8 sequence length a lead byte announces,
+// or 1 for bytes that cannot start a rune.
+func runeLenFromLead(lead byte) int {
+	switch {
+	case lead < 0x80:
+		return 1
+	case lead&0xE0 == 0xC0:
+		return 2
+	case lead&0xF0 == 0xE0:
+		return 3
+	case lead&0xF8 == 0xF0:
+		return 4
+	default:
+		return 1
 	}
 }
 

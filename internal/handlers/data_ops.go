@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"path"
+	"unicode/utf8"
 
 	"github.com/cyverse-de/formation/internal/apierror"
 	"github.com/cyverse-de/formation/internal/clients"
@@ -41,12 +43,16 @@ type Entry struct {
 
 // BrowseResult is an in-memory directory listing or file read from Browse.
 type BrowseResult struct {
-	Path      string
-	Type      string
-	Entries   []Entry
-	Content   []byte
-	Truncated bool // more file bytes were available than returned
-	Metadata  []clients.MetadataAVU
+	Path       string
+	Type       string
+	Entries    []Entry
+	Content    []byte
+	Offset     int   // byte offset the file read started at
+	NextOffset int   // byte offset where the next page starts
+	FileSize   int64 // total size of the file in bytes
+	Binary     bool  // content is not text and should not be rendered
+	Truncated  bool  // more file bytes follow the returned window
+	Metadata   []clients.MetadataAVU
 }
 
 // upstreamStatus returns the HTTP status of an UpstreamError, or 0.
@@ -153,6 +159,31 @@ func (h *Data) listEntries(ctx context.Context, token, irodsPath string, childre
 	return entries, nil
 }
 
+// looksBinary reports whether a file chunk cannot be retrieved faithfully.
+// data-info delivers chunks as JSON strings, replacing unreadable bytes with
+// U+FFFD, so any replacement character means bytes were substituted (or the
+// file already contains lossy-decoded text — indistinguishable) and the
+// byte-offset arithmetic paging depends on no longer matches the file.
+// Refusing such content is the only honest answer; rendering it would
+// silently skip or repeat file bytes across pages. NUL bytes are valid UTF-8
+// and survive the transport, so they signal binary directly. The utf8.Valid
+// check is a safety net for any future raw-byte read path.
+func looksBinary(content []byte) bool {
+	return bytes.IndexByte(content, 0) >= 0 ||
+		bytes.Contains(content, []byte("�")) ||
+		!utf8.Valid(content)
+}
+
+// trimToRuneBoundary cuts content to at most limit bytes without splitting a
+// multibyte character.
+func trimToRuneBoundary(content []byte, limit int) []byte {
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(content[cut]) {
+		cut--
+	}
+	return content[:cut]
+}
+
 // pathMetadata returns the data item's iRODS AVUs.
 func (h *Data) pathMetadata(ctx context.Context, token, dataID string) ([]clients.MetadataAVU, error) {
 	avus, _, err := h.terrain.GetMetadata(ctx, token, dataID)
@@ -216,22 +247,46 @@ func (h *Data) Browse(ctx context.Context, token, irodsPath string, offset, limi
 		result.Entries = entries
 	} else {
 		result.Type = TypeDataObject
+		// data-info errors on negative seek positions; treat them as 0 like
+		// the old download path did.
+		offset = max(offset, 0)
 		readLimit := maxBytes
 		if limit > 0 && limit < readLimit {
 			readLimit = limit
 		}
-		content, fileSize, err := h.terrain.ReadChunk(ctx, token, irodsPath, offset, readLimit)
+		// Over-read by one rune so a character split across the window edge
+		// (which data-info would silently drop) can be returned whole; the
+		// rune-boundary trim below keeps the page within readLimit.
+		content, fileSize, err := h.terrain.ReadChunk(ctx, token, irodsPath, offset, readLimit+utf8.UTFMax-1)
 		if err != nil {
 			return nil, mapDataError(err, irodsPath, "Path")
 		}
-		// data-info caps the read at readLimit, but a chunk of non-UTF-8 bytes
-		// can expand when JSON-encoded; keep the response within maxBytes.
-		if len(content) > readLimit {
-			content = content[:readLimit]
+		result.Binary = looksBinary(content)
+		if !result.Binary && len(content) > readLimit {
+			trimmed := trimToRuneBoundary(content, readLimit)
+			if len(trimmed) == 0 {
+				// The next character is wider than the limit; deliver it
+				// whole anyway so paging always advances.
+				_, runeLen := utf8.DecodeRune(content)
+				trimmed = content[:runeLen]
+			}
+			content = trimmed
 		}
 		result.Content = content
-		// More bytes follow when the file extends past the requested window.
-		result.Truncated = int64(offset)+int64(readLimit) < fileSize
+		result.Offset = offset
+		result.FileSize = fileSize
+		// Content is clean UTF-8 here (looksBinary refused anything
+		// substituted), so decoded length equals file bytes consumed and the
+		// offset arithmetic below is exact.
+		result.NextOffset = offset + len(content)
+		// More bytes follow when the file extends past the delivered window.
+		result.Truncated = int64(result.NextOffset) < fileSize
+		// An offset landing inside a multibyte character reads as an empty
+		// page (data-info drops the partial rune); advance by one byte so
+		// paging re-synchronizes instead of looping on the same offset.
+		if result.Truncated && result.NextOffset == offset {
+			result.NextOffset++
+		}
 	}
 
 	// Metadata lookup errors are swallowed so an outage doesn't break reads.

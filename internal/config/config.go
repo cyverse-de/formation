@@ -140,6 +140,9 @@ func Load() (*Config, error) {
 	if cfg.MCPBrowseByteLimit, err = integer("MCP_BROWSE_BYTE_LIMIT", app, "mcp_browse_byte_limit", DefaultMCPBrowseByteLimit); err != nil {
 		return nil, err
 	}
+	if cfg.MCPBrowseByteLimit <= 0 {
+		return nil, fmt.Errorf("MCP_BROWSE_BYTE_LIMIT must be positive, got %d", cfg.MCPBrowseByteLimit)
+	}
 
 	return cfg, nil
 }

@@ -17,6 +17,8 @@ type Claims struct {
 	PreferredUsername *string `json:"preferred_username"`
 	Email             *string `json:"email"`
 	Name              *string `json:"name"`
+	GivenName         *string `json:"given_name"`
+	FamilyName        *string `json:"family_name"`
 	Exp               int64   `json:"exp"`
 }
 
@@ -28,6 +30,29 @@ func (c *Claims) Expiry() time.Time {
 // IsServiceAccount reports whether the token belongs to a Keycloak service account.
 func (c *Claims) IsServiceAccount() bool {
 	return c.PreferredUsername != nil && strings.HasPrefix(*c.PreferredUsername, serviceAccountPrefix)
+}
+
+// DisplayName returns the user's display name: the name claim, falling back
+// to given_name + family_name, or "" when the token carries neither.
+func (c *Claims) DisplayName() string {
+	if c.Name != nil && *c.Name != "" {
+		return *c.Name
+	}
+	var parts []string
+	for _, p := range []*string{c.GivenName, c.FamilyName} {
+		if p != nil && *p != "" {
+			parts = append(parts, *p)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// EmailAddress returns the email claim, or "" when absent.
+func (c *Claims) EmailAddress() string {
+	if c.Email != nil {
+		return *c.Email
+	}
+	return ""
 }
 
 // Username returns preferred_username, falling back to sub.

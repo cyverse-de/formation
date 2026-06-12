@@ -1,22 +1,11 @@
 package mcp
 
 import (
-	"bytes"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/cyverse-de/formation/internal/handlers"
 )
-
-// looksBinary reports whether a file chunk is non-text. read-chunk returns the
-// chunk as a JSON string, so invalid UTF-8 bytes arrive sanitized to U+FFFD and
-// no longer signal binary; an embedded NUL, which never appears in text and
-// survives the round trip, is the reliable signal. The UTF-8 check remains a
-// safety net for any future raw-byte read path.
-func looksBinary(content []byte) bool {
-	return !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0
-}
 
 // The text builders here mirror the Python formation-mcp server's tool output
 // (minus the emoji) so prompts written against it keep working.
@@ -31,26 +20,30 @@ func strOr(m map[string]any, key, fallback string) string {
 }
 
 func formatWhoami(info *handlers.UserInfo) string {
+	fields := []struct {
+		label string
+		value string
+		code  bool // render the value as an inline code span (paths)
+	}{
+		{"Username", info.Username, false},
+		{"Full Username", info.FullUsername, false},
+		{"Name", info.Name, false},
+		{"Email", info.Email, false},
+		{"Home Directory", info.HomePath, true},
+		{"Trash Directory", info.TrashPath, true},
+		{"Default Output Folder", info.DefaultOutputFolder, true},
+	}
+
 	var b strings.Builder
 	b.WriteString("**Current User**\n\n")
-	fmt.Fprintf(&b, "Username: %s\n", info.Username)
-	if info.FullUsername != "" {
-		fmt.Fprintf(&b, "Full Username: %s\n", info.FullUsername)
-	}
-	if name := strings.TrimSpace(info.FirstName + " " + info.LastName); name != "" {
-		fmt.Fprintf(&b, "Name: %s\n", name)
-	}
-	if info.Email != "" {
-		fmt.Fprintf(&b, "Email: %s\n", info.Email)
-	}
-	if info.HomePath != "" {
-		fmt.Fprintf(&b, "Home Directory: `%s`\n", info.HomePath)
-	}
-	if info.TrashPath != "" {
-		fmt.Fprintf(&b, "Trash Directory: `%s`\n", info.TrashPath)
-	}
-	if info.DefaultOutputFolder != "" {
-		fmt.Fprintf(&b, "Default Output Folder: `%s`\n", info.DefaultOutputFolder)
+	for _, f := range fields {
+		switch {
+		case f.value == "":
+		case f.code:
+			fmt.Fprintf(&b, "%s: `%s`\n", f.label, f.value)
+		default:
+			fmt.Fprintf(&b, "%s: %s\n", f.label, f.value)
+		}
 	}
 	return b.String()
 }
@@ -262,12 +255,13 @@ func formatBrowse(result *handlers.BrowseResult) string {
 				}
 			}
 		}
-	} else if looksBinary(result.Content) {
-		fmt.Fprintf(&b, "**Unsupported file type:** %d bytes — formation serves text content only; this file is not text and cannot be retrieved.", len(result.Content))
+	} else if result.Binary {
+		fmt.Fprintf(&b, "**Unsupported file type:** %d bytes — formation serves text content only; this file is not text and cannot be retrieved.", result.FileSize)
 	} else {
 		fmt.Fprintf(&b, "**File Content:**\n\n```\n%s\n```", result.Content)
 		if result.Truncated {
-			b.WriteString("\n\n*(truncated; each read adds the returned bytes to the conversation — page with offset/limit)*")
+			fmt.Fprintf(&b, "\n\n*(showing bytes %d–%d of %d; continue with offset=%d — each read adds the returned bytes to the conversation)*",
+				result.Offset, result.NextOffset, result.FileSize, result.NextOffset)
 		}
 	}
 
