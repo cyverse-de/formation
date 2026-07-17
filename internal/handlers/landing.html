@@ -143,6 +143,9 @@
 
     <h3>Claude Code</h3>
     <pre><code>claude mcp add --transport http formation {{.MCPURL}}</code></pre>
+    <p class="muted">Or add it globally with <code>--scope user</code> so it is available
+    in every project:</p>
+    <pre><code>claude mcp add --scope user --transport http formation {{.MCPURL}}</code></pre>
 
     <h3>Cursor, VS Code, and other clients</h3>
     <p class="muted">For clients that accept remote servers in an

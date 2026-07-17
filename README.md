@@ -120,8 +120,11 @@ Claude Code and Claude.ai connectors authenticate with the OAuth 2.1 authorizati
 (PKCE) against the existing Keycloak realm, using a single shared **public** client.
 
 ```bash
-# Claude Code
+# Claude Code (current project)
 claude mcp add --transport http formation https://de.example.org/formation/mcp
+
+# Claude Code (globally, available in every project)
+claude mcp add --scope user --transport http formation https://de.example.org/formation/mcp
 ```
 
 ### Tools

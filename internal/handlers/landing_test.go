@@ -26,6 +26,7 @@ func TestLanding(t *testing.T) {
 			wantBody: []string{
 				"https://de.example.org/formation/mcp",
 				"claude mcp add --transport http formation",
+				"claude mcp add --scope user --transport http formation",
 				`"serverUrl"`,
 				"mcp_config.json",
 				"list_apps",
