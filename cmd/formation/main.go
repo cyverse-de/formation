@@ -13,9 +13,9 @@ import (
 
 	"github.com/cyverse-de/go-mod/logging"
 	"github.com/cyverse-de/go-mod/otelutils"
+	echootel "github.com/labstack/echo-otel/v4"
 	"github.com/labstack/echo/v4"
 	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 
 	"github.com/cyverse-de/formation/internal/apierror"
 	"github.com/cyverse-de/formation/internal/auth"
@@ -76,7 +76,13 @@ func buildServer(cfg *config.Config) (*echo.Echo, error) {
 	e := echo.New()
 	e.HideBanner = true
 	e.HTTPErrorHandler = apierror.HTTPErrorHandler
-	e.Use(otelecho.Middleware(serviceName))
+	// otelecho invoked the Echo error handler from the middleware so spans saw the
+	// status our custom handler sent; echootel needs OnNextError for the same behavior.
+	// HTTPErrorHandler returns early on a committed response, so the second call is a no-op.
+	e.Use(echootel.NewMiddlewareWithConfig(echootel.Config{
+		ServerName:  serviceName,
+		OnNextError: func(c echo.Context, err error) { c.Error(err) },
+	}))
 
 	// The gateway forwards requests with the path prefix intact, so strip it
 	// before routing like FastAPI's root_path did; bare paths also work.
